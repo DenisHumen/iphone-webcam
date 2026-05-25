@@ -1,0 +1,47 @@
+# --- Brainstorming / visual companion (не коммитим) ---
+.superpowers/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Rust (десктоп-ядро) ---
+/target/
+**/target/
+*.rs.bk
+Cargo.lock.orig
+
+# --- Node / Tauri frontend ---
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# --- Tauri ---
+/desktop/src-tauri/target/
+/desktop/src-tauri/gen/
+
+# --- Swift / Xcode (iOS-клиент и macOS camera extension) ---
+*.xcuserstate
+xcuserdata/
+DerivedData/
+.build/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+Packages/
+*.resolved
+
+# --- Editors ---
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.shared.json
+*.swp
+
+# --- Misc ---
+*.log
+.env
+.env.local
+tmp/
