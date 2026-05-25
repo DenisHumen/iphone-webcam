@@ -10,7 +10,7 @@
 |---|---|---|
 | Async runtime | `tokio` | сетевой I/O, задачи, каналы |
 | Сериализация control | `serde`, `serde_json` | JSON-сообщения CCP |
-| Бинарные данные | `bytes`, `byteorder` | media-заголовок (LE), буферы |
+| Бинарные данные | `bytes`, `byteorder` | media-заголовок (big-endian), буферы |
 | Логирование | `tracing`, `tracing-subscriber` | структурные логи, диагностика |
 | Ошибки | `thiserror` (в крейтах), `anyhow` (в `app`) | типобезопасные ошибки |
 | mDNS | `mdns-sd` | обнаружение/анонс `_clearcam._tcp` |
@@ -29,8 +29,9 @@
 ### 1.2. USB / usbmuxd
 
 - Подход: **обёртка над libusbmuxd** (libimobiledevice) через FFI, либо реализация клиента usbmux
-  протокола на Rust (plist-over-socket). Кандидаты: `rusty_libimobiledevice` (bindings) или собственный
-  тонкий клиент. usbmuxd-демон: на macOS — встроен (Apple Mobile Device), на Windows — ставится с Apple
+  протокола на Rust (plist-over-socket). Кандидаты (по приоритету): **`idevice`** (чистый Rust, async — говорит с usbmuxd/lockdownd
+  напрямую, без C-зависимости) · `usbmux-client-tokio` (tokio usbmux) · `rusty_libimobiledevice` /
+  `libimobiledevice-sys` (FFI-обёртки над C-библиотекой). usbmuxd-демон: на macOS — встроен (Apple Mobile Device), на Windows — ставится с Apple
   Mobile Device Support, на Linux — пакет `usbmuxd`. Решение и нюансы — ADR в [12](12-decisions-log.md).
 
 ### 1.3. Декод/запись (кросс-платформенный fallback)

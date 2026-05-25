@@ -52,5 +52,5 @@ Zoom, Google Meet, OBS, приложения записи и т. д.
 
 ## Лицензия
 
-Не выбрана (TODO владельца проекта). Зависит от использования v4l2loopback (GPL) и Qt — см.
+Не выбрана — на усмотрение владельца. Учесть лицензии v4l2loopback (GPL) и опц. FFmpeg (LGPL/GPL) — см.
 [docs/12-decisions-log.md](docs/12-decisions-log.md), раздел про лицензии.

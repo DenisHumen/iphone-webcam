@@ -33,24 +33,24 @@
 ```mermaid
 flowchart LR
   subgraph iPhone [iPhone — Swift/SwiftUI]
-    CAP[Capture\nAVFoundation] --> ENC[Encoder\nraw / VideoToolbox]
-    ENC --> TCLI[TransportClient\nNetwork.fw / usbmuxd]
-    SA[StatusAgent\nbattery, telemetry] --> TCLI
-    UI1[SwiftUI\npreview, status]
+    CAP[Capture<br/>AVFoundation] --> ENC[Encoder<br/>raw / VideoToolbox]
+    ENC --> TCLI[TransportClient<br/>Network.fw / usbmuxd]
+    SA[StatusAgent<br/>battery, telemetry] --> TCLI
+    UI1[SwiftUI<br/>preview, status]
   end
   subgraph Desktop [Десктоп — Rust core + Tauri]
-    TSRV[TransportServer] --> CP[ControlPlane\nSessionManager]
+    TSRV[TransportServer] --> CP[ControlPlane<br/>SessionManager]
     TSRV --> MP[MediaPipeline]
-    CP <--> AE[AdaptiveEngine\n+ SpeedTest]
+    CP <--> AE[AdaptiveEngine<br/>+ SpeedTest]
     AE --> MP
-    MP --> VC[VirtualCameraSink\nCMIO / MF / v4l2loopback]
+    MP --> VC[VirtualCameraSink<br/>CMIO / MF / v4l2loopback]
     MP --> PV[PreviewProvider]
     MP --> REC[Recorder опц.]
     PV --> UI2[Tauri UI]
     CP --> UI2
   end
-  TCLI <== control plane JSON ==> TSRV
-  TCLI <== media plane binary ==> TSRV
+  TCLI <-->|control JSON| TSRV
+  TCLI <-->|media binary| TSRV
 ```
 
 ## 2. Два логических плана

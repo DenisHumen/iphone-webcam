@@ -32,7 +32,8 @@
   или `…VideoRange` — формат фиксируем как **NV12**, флаг `fullRange` сообщаем в media-заголовке.
 - Кадры приходят как `CMSampleBuffer` → `CVPixelBuffer` (backed by IOSurface, без лишних копий).
 - **Перечисление камер:** `AVCaptureDevice.DiscoverySession` по типам
-  `[.builtInWideAngleCamera, .builtInUltraWideCamera, .builtInTelephotoCamera, .builtInTrueDepthCamera/front]`.
+  `.builtInWideAngleCamera`, `.builtInUltraWideCamera`, `.builtInTelephotoCamera` для обеих позиций
+  (фронтальная — `.builtInWideAngleCamera`/`.builtInTrueDepthCamera` с `position == .front`).
   Для каждого — id, позиция, поддерживаемые форматы (макс. разрешение/fps). Отдаём в `CAMERA_LIST`.
 - **Переключение объектива (`SET_CAMERA`):** `beginConfiguration` → заменить `AVCaptureDeviceInput` →
   `commitConfiguration`. Бесшовно, без пересоздания сессии. Подтверждаем `CAMERA_STATE`.
