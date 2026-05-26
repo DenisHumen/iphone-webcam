@@ -1,0 +1,22 @@
+[package]
+name = "ccp-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "ClearCam protocol (CCP) — pure data + (de)serialization."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+bytes = { workspace = true }
+byteorder = { workspace = true }
+bitflags = { workspace = true }
+thiserror = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"

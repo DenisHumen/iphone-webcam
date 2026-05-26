@@ -1,7 +1,7 @@
 edition = "2021"
 max_width = 100
-imports_granularity = "Crate"
-group_imports = "StdExternalCrate"
 newline_style = "Unix"
 use_field_init_shorthand = true
 use_try_shorthand = true
+# Note: `imports_granularity` and `group_imports` are nightly-only;
+# enable them once we adopt a nightly rustfmt or pin a nightly toolchain.

@@ -1,0 +1,10 @@
+[package]
+name = "sink"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "ClearCam sink — stub crate, see docs/02-architecture.md (filled in later phases)"
+
+[dependencies]
