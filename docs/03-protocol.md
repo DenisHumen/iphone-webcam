@@ -134,7 +134,7 @@ JSON, поле `t` — тип. Ниже — назначение и ключев
 | `AUTH_OK` | ПК→iPhone | `sessionId` | успех |
 | `MEDIA_HELLO`| iPhone→ПК | `sessionId`,`token` | привязка media-соединения |
 | `BYE` | оба | `reason` | корректное завершение |
-| `ERROR` | оба | `code`,`message`,`ack?` | ошибка (см. §11) |
+| `ERROR` | оба | `code`,`message` | ошибка (см. §11; `seq` неудачного запроса несёт `ack` конверта) |
 
 ### 6.2. Устройство и камеры
 
@@ -167,7 +167,7 @@ JSON, поле `t` — тип. Ниже — назначение и ключев
 | `t` | Направление | Поля | Назначение |
 |---|---|---|---|
 | `SPEEDTEST_START` | ПК→iPhone | `id`,`targetBitrate`,`durationMs`,`pattern` | запросить генерацию нагрузки |
-| `SPEEDTEST_TICK` | iPhone→ПК | `id`,`seq`,`tsUsec` (+ нагрузка идёт по media как `type=video,flags.config? нет` спец-маркер) | прогресс |
+| `SPEEDTEST_TICK` | iPhone→ПК | `id`,`tickIndex`,`tsUsec` (+ нагрузка идёт по media как `type=video,flags.config? нет` спец-маркер; внутренний счётчик зовётся `tickIndex`, чтобы не пересекаться с `seq` конверта) | прогресс |
 | `SPEEDTEST_RESULT`| ПК→iPhone | `id`,`goodputMbps`,`rttMs`,`jitterMs`,`lossPct`,`recommendedMode` | итог |
 
 > Нагрузка теста физически идёт по **media**-соединению (реалистично измеряет именно видео-путь),
