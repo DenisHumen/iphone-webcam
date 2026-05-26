@@ -9,6 +9,7 @@ members = [
     "crates/decode",
     "crates/sink",
     "crates/app",
+    "src-tauri",
 ]
 exclude = ["ui"]
 
