@@ -5,20 +5,31 @@
 //! Each JSON object has a `t` (type) discriminator, a `seq` counter, and an optional
 //! `ack` referencing the request `seq`.
 
+pub mod device;
 pub mod envelope;
 pub mod handshake;
+pub mod streaming;
+pub mod telemetry;
 
 use serde::{Deserialize, Serialize};
 
+pub use device::{
+    BatteryState, CameraEntry, CameraList, CameraPosition, CameraState, DeviceInfo, SetCamera,
+    ThermalState,
+};
 pub use envelope::{frame, try_unframe, FrameError, DEFAULT_MAX_PAYLOAD, PREFIX_LEN};
 pub use handshake::{
     Auth, AuthOk, Bye, DeviceIdent, ErrorCode, ErrorMsg, Hello, HelloAck, MediaHello,
 };
+pub use streaming::{CodecName, FormatKind, Mode, ModeApplied, PixelFormat, SetMode, Start, Stop};
+pub use telemetry::{Ping, Pong, Telemetry};
 
 /// Wire-level wrapper carrying `seq`, optional `ack`, and a typed body.
 ///
 /// JSON shape (flattened): `{ "seq": .., "ack": .., "t": "...", ... body fields ... }`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Note: cannot derive `Eq` because some variants contain `f64`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ControlEnvelope {
     pub seq: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -30,7 +41,9 @@ pub struct ControlEnvelope {
 /// Internally-tagged discriminated union over all CCP control messages.
 ///
 /// Tag values mirror the wire strings in `docs/03-protocol.md` §6.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Note: cannot derive `Eq` because `Telemetry` contains `f64`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t")]
 pub enum ControlMessage {
     #[serde(rename = "HELLO")]
@@ -47,7 +60,29 @@ pub enum ControlMessage {
     Bye(Bye),
     #[serde(rename = "ERROR")]
     Error(ErrorMsg),
-    // Additional variants added in Tasks 6–7.
+    #[serde(rename = "DEVICE_INFO")]
+    DeviceInfo(DeviceInfo),
+    #[serde(rename = "CAMERA_LIST")]
+    CameraList(CameraList),
+    #[serde(rename = "SET_CAMERA")]
+    SetCamera(SetCamera),
+    #[serde(rename = "CAMERA_STATE")]
+    CameraState(CameraState),
+    #[serde(rename = "START")]
+    Start(Start),
+    #[serde(rename = "STOP")]
+    Stop(Stop),
+    #[serde(rename = "SET_MODE")]
+    SetMode(SetMode),
+    #[serde(rename = "MODE_APPLIED")]
+    ModeApplied(ModeApplied),
+    #[serde(rename = "TELEMETRY")]
+    Telemetry(Telemetry),
+    #[serde(rename = "PING")]
+    Ping(Ping),
+    #[serde(rename = "PONG")]
+    Pong(Pong),
+    // SPEEDTEST_* variants added in Task 7.
 }
 
 #[cfg(test)]
@@ -97,5 +132,44 @@ mod tests {
         assert_eq!(v["ack"], 99);
         assert_eq!(v["t"], "ERROR");
         assert_eq!(v["code"], "bad_request");
+    }
+
+    #[test]
+    fn envelope_set_camera_round_trip() {
+        let env = ControlEnvelope {
+            seq: 42,
+            ack: None,
+            body: ControlMessage::SetCamera(SetCamera {
+                camera_id: "wide".into(),
+            }),
+        };
+        let s = serde_json::to_string(&env).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["t"], "SET_CAMERA");
+        assert_eq!(v["cameraId"], "wide");
+        let back: ControlEnvelope = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, env);
+    }
+
+    #[test]
+    fn envelope_telemetry_round_trip() {
+        let env = ControlEnvelope {
+            seq: 7,
+            ack: None,
+            body: ControlMessage::Telemetry(Telemetry {
+                ts_usec: 1,
+                battery_level: 1.0,
+                battery_state: BatteryState::Full,
+                thermal_state: ThermalState::Nominal,
+                sent_bitrate_kbps: 0,
+                enc_fps: 0,
+                capture_fps: 0,
+                queue_depth: 0,
+                drop_count: 0,
+            }),
+        };
+        let s = serde_json::to_string(&env).unwrap();
+        let back: ControlEnvelope = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, env);
     }
 }
