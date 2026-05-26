@@ -1,6 +1,10 @@
 # --- Brainstorming / visual companion (не коммитим) ---
 .superpowers/
 
+# --- Claude Code: личные локальные настройки (settings.json — общий, коммитим) ---
+.claude/settings.local.json
+.claude/.session*
+
 # --- OS ---
 .DS_Store
 Thumbs.db
