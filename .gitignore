@@ -22,6 +22,11 @@ dist/
 dist-ssr/
 .vite/
 *.local
+# TypeScript incremental build artifacts (from `tsc -b` with composite projects)
+*.tsbuildinfo
+# Generated from .ts when tsconfig.node.json is composite (vite.config.ts -> .js+.d.ts)
+desktop/ui/vite.config.js
+desktop/ui/vite.config.d.ts
 
 # --- Tauri ---
 /desktop/src-tauri/target/
