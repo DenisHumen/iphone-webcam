@@ -5,6 +5,10 @@
 #![forbid(unsafe_code)]
 
 pub mod control;
+pub mod media;
 pub mod version;
 
+pub use media::{
+    Codec, DecodeError as MediaDecodeError, Flags, MediaHeader, MediaType, HEADER_LEN, MAGIC,
+};
 pub use version::{Capability, PROTO_VER};
