@@ -4,4 +4,4 @@
 
 #![forbid(unsafe_code)]
 
-// Modules are added in later tasks of Phase 0.
+pub mod control;
