@@ -5,3 +5,6 @@
 #![forbid(unsafe_code)]
 
 pub mod control;
+pub mod version;
+
+pub use version::{Capability, PROTO_VER};
