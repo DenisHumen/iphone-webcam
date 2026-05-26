@@ -66,14 +66,13 @@ pub enum ErrorCode {
     Timeout,
 }
 
+/// Error body. The `seq` of the failing request, when applicable, is carried by the
+/// envelope's `ack` field — `ErrorMsg` itself does not duplicate it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorMsg {
     pub code: ErrorCode,
     pub message: String,
-    /// `seq` of the request this error replies to, when applicable.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ack: Option<u64>,
 }
 
 #[cfg(test)]
@@ -103,13 +102,13 @@ mod tests {
     }
 
     #[test]
-    fn error_omits_ack_when_none() {
+    fn error_msg_has_no_ack_field() {
         let e = ErrorMsg {
             code: ErrorCode::Unauthorized,
             message: "bad token".into(),
-            ack: None,
         };
         let s = serde_json::to_string(&e).unwrap();
+        // ack belongs to the envelope; not in the body.
         assert!(!s.contains("\"ack\""));
     }
 

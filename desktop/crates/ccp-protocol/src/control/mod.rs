@@ -8,6 +8,7 @@
 pub mod device;
 pub mod envelope;
 pub mod handshake;
+pub mod speedtest;
 pub mod streaming;
 pub mod telemetry;
 
@@ -21,6 +22,7 @@ pub use envelope::{frame, try_unframe, FrameError, DEFAULT_MAX_PAYLOAD, PREFIX_L
 pub use handshake::{
     Auth, AuthOk, Bye, DeviceIdent, ErrorCode, ErrorMsg, Hello, HelloAck, MediaHello,
 };
+pub use speedtest::{SpeedtestPattern, SpeedtestResult, SpeedtestStart, SpeedtestTick};
 pub use streaming::{CodecName, FormatKind, Mode, ModeApplied, PixelFormat, SetMode, Start, Stop};
 pub use telemetry::{Ping, Pong, Telemetry};
 
@@ -42,7 +44,7 @@ pub struct ControlEnvelope {
 ///
 /// Tag values mirror the wire strings in `docs/03-protocol.md` §6.
 ///
-/// Note: cannot derive `Eq` because `Telemetry` contains `f64`.
+/// Note: cannot derive `Eq` because `Telemetry`/`SpeedtestResult` contain `f64`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t")]
 pub enum ControlMessage {
@@ -82,7 +84,12 @@ pub enum ControlMessage {
     Ping(Ping),
     #[serde(rename = "PONG")]
     Pong(Pong),
-    // SPEEDTEST_* variants added in Task 7.
+    #[serde(rename = "SPEEDTEST_START")]
+    SpeedtestStart(SpeedtestStart),
+    #[serde(rename = "SPEEDTEST_TICK")]
+    SpeedtestTick(SpeedtestTick),
+    #[serde(rename = "SPEEDTEST_RESULT")]
+    SpeedtestResult(SpeedtestResult),
 }
 
 #[cfg(test)]
@@ -124,7 +131,6 @@ mod tests {
             body: ControlMessage::Error(ErrorMsg {
                 code: ErrorCode::BadRequest,
                 message: "oops".into(),
-                ack: None,
             }),
         };
         let s = serde_json::to_string(&env).unwrap();
@@ -171,5 +177,120 @@ mod tests {
         let s = serde_json::to_string(&env).unwrap();
         let back: ControlEnvelope = serde_json::from_str(&s).unwrap();
         assert_eq!(back, env);
+    }
+
+    #[test]
+    fn all_variants_round_trip_through_envelope() {
+        let mode = Mode {
+            format: FormatKind::Raw,
+            codec: CodecName::None,
+            width: 1280,
+            height: 720,
+            fps: 30,
+            bitrate_kbps: 0,
+            pixel_format: PixelFormat::Nv12,
+            full_range: false,
+        };
+
+        let cases: Vec<ControlMessage> = vec![
+            ControlMessage::Hello(Hello {
+                proto_ver: 1,
+                app: "x".into(),
+                device: DeviceIdent {
+                    model: "m".into(),
+                    os_ver: "v".into(),
+                },
+                session_id: "s".into(),
+                caps: vec![Capability::Hevc],
+            }),
+            ControlMessage::HelloAck(HelloAck {
+                proto_ver: 1,
+                caps: vec![],
+            }),
+            ControlMessage::Auth(Auth { token: "t".into() }),
+            ControlMessage::AuthOk(AuthOk {
+                session_id: "s".into(),
+            }),
+            ControlMessage::MediaHello(MediaHello {
+                session_id: "s".into(),
+                token: "t".into(),
+            }),
+            ControlMessage::Bye(Bye {
+                reason: "done".into(),
+            }),
+            ControlMessage::Error(ErrorMsg {
+                code: ErrorCode::Timeout,
+                message: "x".into(),
+            }),
+            ControlMessage::DeviceInfo(DeviceInfo {
+                model: "m".into(),
+                os_ver: "v".into(),
+                battery_level: 0.5,
+                battery_state: BatteryState::Charging,
+                thermal_state: ThermalState::Nominal,
+                usb3_capable: false,
+            }),
+            ControlMessage::CameraList(CameraList { cameras: vec![] }),
+            ControlMessage::SetCamera(SetCamera {
+                camera_id: "wide".into(),
+            }),
+            ControlMessage::CameraState(CameraState {
+                active_camera_id: "wide".into(),
+                applied_format: "1080p30 hevc".into(),
+            }),
+            ControlMessage::Start(Start { mode: mode.clone() }),
+            ControlMessage::Stop(Stop {}),
+            ControlMessage::SetMode(SetMode { mode: mode.clone() }),
+            ControlMessage::ModeApplied(ModeApplied {
+                mode: mode.clone(),
+                at_seq: 0,
+            }),
+            ControlMessage::Telemetry(Telemetry {
+                ts_usec: 0,
+                battery_level: 0.0,
+                battery_state: BatteryState::Unknown,
+                thermal_state: ThermalState::Nominal,
+                sent_bitrate_kbps: 0,
+                enc_fps: 0,
+                capture_fps: 0,
+                queue_depth: 0,
+                drop_count: 0,
+            }),
+            ControlMessage::Ping(Ping { ts_usec: 0 }),
+            ControlMessage::Pong(Pong {
+                ts_usec: 0,
+                echo_usec: 0,
+            }),
+            ControlMessage::SpeedtestStart(SpeedtestStart {
+                id: "x".into(),
+                target_bitrate_kbps: 0,
+                duration_ms: 0,
+                pattern: SpeedtestPattern::Ramp,
+            }),
+            ControlMessage::SpeedtestTick(SpeedtestTick {
+                id: "x".into(),
+                tick_index: 0,
+                ts_usec: 0,
+            }),
+            ControlMessage::SpeedtestResult(SpeedtestResult {
+                id: "x".into(),
+                goodput_mbps: 0.0,
+                rtt_ms: 0.0,
+                jitter_ms: 0.0,
+                loss_pct: 0.0,
+                recommended_mode: mode,
+            }),
+        ];
+
+        for body in cases {
+            let env = ControlEnvelope {
+                seq: 1,
+                ack: None,
+                body: body.clone(),
+            };
+            let s = serde_json::to_string(&env).unwrap();
+            let back: ControlEnvelope = serde_json::from_str(&s).unwrap();
+            assert_eq!(back, env, "round-trip failed for {body:?}");
+        }
     }
 }
