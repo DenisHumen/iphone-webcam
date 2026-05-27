@@ -2763,6 +2763,16 @@ dependencies = [
 [[package]]
 name = "session"
 version = "0.1.0"
+dependencies = [
+ "ccp-protocol",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "transport",
+ "uuid",
+]
 
 [[package]]
 name = "sha2"

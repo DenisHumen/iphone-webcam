@@ -1,6 +1,9 @@
-//! `session` — stub crate for Phase 0.
-//!
-//! See `docs/02-architecture.md` for the planned responsibilities of this module.
-//! Implementation lands in later phases per `docs/10-roadmap-and-plan.md`.
+//! `session` — control plane actor, handshake, and media pairing.
 
 #![forbid(unsafe_code)]
+
+pub mod error;
+pub mod state;
+
+pub use error::SessionError;
+pub use state::{DeviceSnapshot, PendingMediaBindings, SessionSnapshot, SessionStateKind};
