@@ -3426,3 +3426,34 @@ Phase 0 is complete. The next worker should invoke `superpowers:writing-plans` a
 3. **Resist scope expansion.** Do not add tokio, networking, mDNS, QR generation, decoders, or any platform code in Phase 0. Those crates' `lib.rs` files contain only the doc-comment stub from Task 2. Any addition belongs to a later phase plan.
 4. **Cross-language byte-exactness.** The Rust and Swift media-header tests assert the **same** byte sequence (28 bytes). If you change anything about the header encoding, both test files must be updated and must agree.
 5. **Commit hygiene.** One commit per task is the default; if a task's steps decompose naturally into smaller commits, that's fine. Never combine multiple tasks into a single commit.
+
+---
+
+## Phase 0 — DONE (2026-05-27)
+
+**Commits** `45e3b26..180942f` (16 commits incl. inline doc-syncs and chores) on `main`, all pushed to `git@github.com:DenisHumen/iphone-webcam.git`.
+
+**Final verification (local, full gate chain):**
+- Rust: `cargo fmt --check` clean · `cargo clippy --workspace --all-targets -- -D warnings` clean · `cargo test --workspace` — **36 tests pass** (all in `ccp-protocol`).
+- UI: `pnpm typecheck` · `pnpm lint` · `pnpm format:check` · `pnpm build` — all green; bundle `dist/index-Gqh6B1YA.js` 142.91 kB (gzip 45.91 kB).
+- Swift: `swift build` complete · `swift test` — **17 tests pass** (`MediaHeaderTests` × 9, `ControlEnvelopeFramingTests` × 5, `ControlMessageJSONTests` × 3 incl. all-21-variants iterator).
+- **Cross-language golden-bytes check passes both ways** — the 28-byte expected array in Rust `media::tests::known_bytes_encode` matches Swift `MediaHeaderTests.testKnownBytesEncode`.
+
+**Deviations from the plan:**
+- Drop `clippy::pedantic` from `ccp-protocol/Cargo.toml` lints (pedantic was overzealous for a pure-data crate — kept `clippy::all`, which is plenty rigorous; `clippy --workspace -- -D warnings` is still gated by CI).
+- Drop nightly-only options (`imports_granularity`, `group_imports`) from `rustfmt.toml`; commented placeholder kept for the future.
+- `swift-tools-version` lowered from `5.10` (planned) to `5.9` — works against `/Applications/Xcode.app/Contents/Developer` and the macos-latest CI runner. The system's Command Line Tools shipped a broken PackageDescription stub, so `scripts/swift-env.sh` is provided to pick the full Xcode toolchain via `DEVELOPER_DIR`.
+- Tauri 2 `clearcam-desktop` crate name is `clearcam_desktop_lib` (lib) + `clearcam_desktop` (cdylib) — Tauri 2 convention; harmless.
+- `desktop/ui/.prettierignore` added in a follow-up commit to skip the tsc-generated `vite.config.{js,d.ts}` (also gitignored).
+
+**New ADRs introduced during execution** (will be lifted into `docs/12-decisions-log.md` next session):
+- **ErrorMsg has no body-level `ack`.** The `ack?` mentioned in §6.1 ERROR row of the spec was duplicating the envelope's `ack` — they would collide on the wire after `#[serde(flatten)]`. `ack` is envelope-only.
+- **SpeedtestTick's inner counter is `tickIndex`, not `seq`.** Same collision reason. `id` is the `String` run id from `SpeedtestStart` (the previous plan placeholder `id_seq: u32` was inconsistent and is replaced).
+- Both corrections are reflected in commit `7f967fa` of `docs/03-protocol.md`.
+
+**Items deferred to Phase 1:** none — Phase 0 carries no feature code by design. The Source of truth for the next phase is `docs/10-roadmap-and-plan.md` §«Фаза 1».
+
+**Tag:** `v0.1.0-phase0` (annotated).
+
+**Next step.** Phase 1 plan: run `superpowers:writing-plans` with the goal "iPhone client connects to the desktop over Wi-Fi loopback, completes the CCP handshake, exchanges `DEVICE_INFO`/`CAMERA_LIST`/`TELEMETRY`. No video yet." Source the artefacts in `docs/01–13.md` and the new ADRs above.
+
