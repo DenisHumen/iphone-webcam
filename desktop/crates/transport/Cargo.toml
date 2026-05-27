@@ -5,6 +5,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "ClearCam transport — stub crate, see docs/02-architecture.md (filled in later phases)"
+description = "ClearCam transport — async TCP server/client + length-prefixed framing"
 
 [dependencies]
+ccp-protocol = { path = "../ccp-protocol" }
+tokio = { workspace = true }
+bytes = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

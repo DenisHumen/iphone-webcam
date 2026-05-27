@@ -1,6 +1,11 @@
-//! `transport` — stub crate for Phase 0.
+//! `transport` — async TCP server/client + length-prefixed JSON framing.
 //!
-//! See `docs/02-architecture.md` for the planned responsibilities of this module.
-//! Implementation lands in later phases per `docs/10-roadmap-and-plan.md`.
+//! See `docs/02-architecture.md` and `docs/03-protocol.md` §5.
 
 #![forbid(unsafe_code)]
+
+pub mod error;
+pub mod framing;
+
+pub use error::TransportError;
+pub use framing::{read_frame, write_frame};
