@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "ClearCamProtocol", targets: ["ClearCamProtocol"]),
         .library(name: "ClearCamCore", targets: ["ClearCamCore"]),
+        .library(name: "ClearCamAppKit", targets: ["ClearCamAppKit"]),
     ],
     targets: [
         .target(name: "ClearCamProtocol", path: "Sources/ClearCamProtocol"),
@@ -14,6 +15,11 @@ let package = Package(
             name: "ClearCamCore",
             dependencies: ["ClearCamProtocol"],
             path: "Sources/ClearCamCore"
+        ),
+        .target(
+            name: "ClearCamAppKit",
+            dependencies: ["ClearCamCore"],
+            path: "Sources/ClearCamApp"
         ),
         .testTarget(
             name: "ClearCamProtocolTests",
