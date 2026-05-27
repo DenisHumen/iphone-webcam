@@ -4060,7 +4060,29 @@ git push --tags
 
 ## Acceptance log
 
-_(Empty — populated as the plan executes.)_
+### 2026-05-27 — Section 1A automated acceptance
+
+- `cargo fmt --all --check` ✓
+- `cargo clippy --workspace --all-targets -- -D warnings` ✓
+- `cargo test --workspace --all-targets` → **7 tests passed** (transport: 6, session: 6, app: 2, app integration: 1)
+- `cargo build -p clearcam-desktop` ✓ (Tauri shell compiles cleanly with new commands/events)
+- `cargo run -p mock-iphone -- --help` ✓
+- `cd desktop/ui && pnpm typecheck && pnpm lint && pnpm format:check && pnpm build` ✓
+
+### Section 1A — manual UI smoke (deferred to user)
+
+The headless e2e test (`crates/app/tests/e2e_mock_iphone.rs`) already verifies
+the full handshake end-to-end through `AppCore`. Visual verification of the
+Tauri window is a one-step manual check left to the user:
+
+```bash
+cd desktop && cargo tauri dev
+# in another terminal, copy cport/mport/token from UI (or RUST_LOG=info logs)
+cargo run -p mock-iphone -- --host 127.0.0.1 --cport <CPORT> --mport <MPORT> --token <TOKEN>
+```
+
+Expected: UI flips from "Ожидание iPhone" → "Подключено", device card shows
+iPhone15,3 / iOS 18.0 / 4 cameras, telemetry meter updates every ~500 ms.
 
 ---
 
