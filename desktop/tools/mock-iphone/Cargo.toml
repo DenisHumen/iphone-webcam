@@ -1,0 +1,22 @@
+[package]
+name = "mock-iphone"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Mock iPhone client used by integration tests and manual checks (Phase 1)"
+
+[[bin]]
+name = "mock-iphone"
+path = "src/main.rs"
+
+[dependencies]
+ccp-protocol = { path = "../../crates/ccp-protocol" }
+transport = { path = "../../crates/transport" }
+session = { path = "../../crates/session" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
