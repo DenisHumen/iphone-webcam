@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "ClearCam Tauri shell (Phase 0)"
+description = "ClearCam Tauri shell (Phase 1)"
 
 [lib]
 name = "clearcam_desktop_lib"
@@ -18,3 +18,10 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+app = { path = "../crates/app" }
+session = { path = "../crates/session" }
+ccp-protocol = { path = "../crates/ccp-protocol" }
+qrcode = { workspace = true }

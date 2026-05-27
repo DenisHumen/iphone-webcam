@@ -368,10 +368,17 @@ dependencies = [
 name = "clearcam-desktop"
 version = "0.1.0"
 dependencies = [
+ "app",
+ "ccp-protocol",
+ "qrcode",
  "serde",
  "serde_json",
+ "session",
  "tauri",
  "tauri-build",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
