@@ -7,7 +7,12 @@
 pub mod error;
 pub mod framing;
 pub mod streams;
+pub mod wifi;
 
 pub use error::TransportError;
 pub use framing::{read_frame, write_frame};
 pub use streams::{ControlStream, MediaStream, PeerInfo};
+pub use wifi::{
+    client::connect as wifi_connect,
+    server::{BoundPorts, BoundPortsWithListeners, WifiServerEvent},
+};

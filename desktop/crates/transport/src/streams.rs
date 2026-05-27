@@ -29,6 +29,14 @@ pub struct ControlStream {
     rx_buf: Vec<u8>,
 }
 
+impl std::fmt::Debug for ControlStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlStream")
+            .field("peer", &self.peer)
+            .finish()
+    }
+}
+
 impl ControlStream {
     pub fn from_tcp(peer: PeerInfo, sock: TcpStream) -> Self {
         let (r, w) = tokio::io::split(sock);
@@ -69,6 +77,14 @@ pub struct MediaStream {
     pub peer: PeerInfo,
     pub reader: BoxedReader,
     pub writer: BoxedWriter,
+}
+
+impl std::fmt::Debug for MediaStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MediaStream")
+            .field("peer", &self.peer)
+            .finish()
+    }
 }
 
 impl MediaStream {
