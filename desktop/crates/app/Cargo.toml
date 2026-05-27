@@ -1,11 +1,20 @@
 [package]
-name = "clearcam-app"
+name = "app"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+description = "ClearCam app core — wires transport + session + UI events"
 
-[[bin]]
-name = "clearcam"
-path = "src/main.rs"
+[dependencies]
+ccp-protocol = { path = "../ccp-protocol" }
+transport = { path = "../transport" }
+session = { path = "../session" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+qrcode = { workspace = true }
+rand = { workspace = true }

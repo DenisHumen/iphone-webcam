@@ -30,7 +30,21 @@ pub struct ControlPlane {
 }
 
 impl ControlPlane {
+    /// Create a `ControlPlane` over caller-provided channels. The caller keeps
+    /// the receiver halves so multiple session lifetimes can share one UI sink.
     pub fn new(
+        events_tx: mpsc::Sender<ControlPlaneEvent>,
+        snapshot_tx: watch::Sender<SessionSnapshot>,
+    ) -> Self {
+        Self {
+            events_tx,
+            snapshot_tx,
+        }
+    }
+
+    /// Convenience constructor for tests: spawns owned channels and returns the
+    /// receivers alongside the actor.
+    pub fn with_owned_channels(
         events_capacity: usize,
     ) -> (
         Self,
@@ -39,18 +53,7 @@ impl ControlPlane {
     ) {
         let (events_tx, events_rx) = mpsc::channel(events_capacity);
         let (snapshot_tx, snapshot_rx) = watch::channel(SessionSnapshot::idle());
-        (
-            Self {
-                events_tx,
-                snapshot_tx,
-            },
-            events_rx,
-            snapshot_rx,
-        )
-    }
-
-    pub fn snapshot_handle(&self) -> watch::Receiver<SessionSnapshot> {
-        self.snapshot_tx.subscribe()
+        (Self::new(events_tx, snapshot_tx), events_rx, snapshot_rx)
     }
 
     pub async fn run(
@@ -194,7 +197,7 @@ mod tests {
         let srv = ControlStream::from_halves(peer(), ra, wa);
         let mut cli = ControlStream::from_halves(peer(), rb, wb);
 
-        let (cp, mut rx, snap_rx) = ControlPlane::new(16);
+        let (cp, mut rx, snap_rx) = ControlPlane::with_owned_channels(16);
         let accepted = AcceptedSession {
             session_id: "sess-1".into(),
             token: "t".into(),

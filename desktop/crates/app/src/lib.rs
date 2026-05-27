@@ -1,0 +1,213 @@
+//! `app` — top-level wiring of transport + session for Phase 1.
+//!
+//! Public API:
+//!   - `AppCore::start()` — bind ports, run accept loop, return handle.
+//!   - `AppHandle::snapshot` — current `SessionSnapshot` watch receiver.
+//!   - `AppHandle::events` — mpsc receiver of `ControlPlaneEvent`s.
+//!   - `AppHandle::qr` — payload to embed in the QR code.
+
+#![forbid(unsafe_code)]
+
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use rand::RngCore;
+use serde::Serialize;
+use session::{
+    accept_control, read_media_hello, ControlPlane, ControlPlaneEvent, MediaBinding,
+    SessionSnapshot, SessionStateKind,
+};
+use tokio::sync::{mpsc, watch, Mutex};
+use tokio::task::JoinHandle;
+use tracing::{info, warn};
+use transport::{BoundPortsWithListeners, MediaStream, WifiServerEvent};
+
+#[derive(Debug, Clone, Serialize)]
+pub struct QrPayload {
+    pub v: u32,
+    pub host: String,
+    pub cport: u16,
+    pub mport: u16,
+    pub token: String,
+}
+
+pub struct AppCore {
+    pub host: String,
+}
+
+pub struct AppHandle {
+    pub qr: QrPayload,
+    pub snapshot: watch::Receiver<SessionSnapshot>,
+    pub events: Arc<Mutex<mpsc::Receiver<ControlPlaneEvent>>>,
+    accept_task: JoinHandle<()>,
+}
+
+impl AppHandle {
+    /// Abort the background accept loop. Sockets close when the task drops.
+    pub fn shutdown(&self) {
+        self.accept_task.abort();
+    }
+}
+
+impl AppCore {
+    pub async fn start(self) -> anyhow::Result<AppHandle> {
+        let mut token_bytes = [0u8; 24];
+        rand::thread_rng().fill_bytes(&mut token_bytes);
+        let token = base64_url(&token_bytes);
+
+        let bound = BoundPortsWithListeners::bind(
+            "0.0.0.0:0".parse::<SocketAddr>()?,
+            "0.0.0.0:0".parse::<SocketAddr>()?,
+        )
+        .await?;
+        let cport = bound.bound.control.port();
+        let mport = bound.bound.media.port();
+        let (wifi_tx, wifi_rx) = mpsc::channel::<WifiServerEvent>(8);
+        bound.spawn(wifi_tx);
+
+        let (events_tx, events_rx) = mpsc::channel::<ControlPlaneEvent>(64);
+        let (snapshot_tx, snapshot_rx) = watch::channel(SessionSnapshot {
+            state: SessionStateKind::Listening {
+                control_port: cport,
+                media_port: mport,
+            },
+            device: None,
+            last_telemetry: None,
+        });
+
+        let accept_task = spawn_accept_loop(wifi_rx, events_tx, snapshot_tx, token.clone());
+
+        Ok(AppHandle {
+            qr: QrPayload {
+                v: 1,
+                host: self.host,
+                cport,
+                mport,
+                token,
+            },
+            snapshot: snapshot_rx,
+            events: Arc::new(Mutex::new(events_rx)),
+            accept_task,
+        })
+    }
+}
+
+fn spawn_accept_loop(
+    mut wifi_rx: mpsc::Receiver<WifiServerEvent>,
+    events_tx: mpsc::Sender<ControlPlaneEvent>,
+    snapshot_tx: watch::Sender<SessionSnapshot>,
+    expected_token: String,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut pending: HashMap<(String, String), tokio::sync::oneshot::Sender<MediaStream>> =
+            HashMap::new();
+        loop {
+            match wifi_rx.recv().await {
+                None => return,
+                Some(WifiServerEvent::Control(mut cs)) => {
+                    snapshot_tx.send_modify(|s| {
+                        s.state = SessionStateKind::Handshaking;
+                    });
+                    let token = expected_token.clone();
+                    let caps = vec![
+                        ccp_protocol::Capability::Hevc,
+                        ccp_protocol::Capability::H264,
+                        ccp_protocol::Capability::RawNv12,
+                    ];
+                    match accept_control(&mut cs, &token, &caps).await {
+                        Ok(acc) => {
+                            let session_id = acc.session_id.clone();
+                            let auth_token = acc.token.clone();
+                            let (tx_media, rx_media) = tokio::sync::oneshot::channel();
+                            pending.insert((session_id.clone(), auth_token.clone()), tx_media);
+                            tokio::spawn(async move {
+                                if let Ok(_ms) = rx_media.await {
+                                    info!(%session_id, "media stream attached (parked for Phase 2)");
+                                }
+                            });
+                            let cp = ControlPlane::new(events_tx.clone(), snapshot_tx.clone());
+                            tokio::spawn(async move {
+                                if let Err(e) = cp.run(acc, cs).await {
+                                    warn!(error = ?e, "control plane exited");
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            warn!(error = ?e, "handshake failed");
+                            snapshot_tx.send_modify(|s| {
+                                s.state = SessionStateKind::Listening {
+                                    control_port: 0,
+                                    media_port: 0,
+                                };
+                            });
+                        }
+                    }
+                }
+                Some(WifiServerEvent::Media(mut ms)) => match read_media_hello(&mut ms).await {
+                    Ok(MediaBinding { session_id, token }) => {
+                        if let Some(tx) = pending.remove(&(session_id.clone(), token.clone())) {
+                            let _ = tx.send(ms);
+                            info!(%session_id, "media paired");
+                        } else {
+                            warn!(%session_id, "no pending control session for this media");
+                        }
+                    }
+                    Err(e) => warn!(error = ?e, "media hello failed"),
+                },
+            }
+        }
+    })
+}
+
+fn base64_url(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let mut buf = [0u8; 3];
+        for (i, b) in chunk.iter().enumerate() {
+            buf[i] = *b;
+        }
+        let n = (u32::from(buf[0]) << 16) | (u32::from(buf[1]) << 8) | u32::from(buf[2]);
+        out.push(ALPHABET[((n >> 18) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((n >> 12) & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(ALPHABET[((n >> 6) & 0x3f) as usize] as char);
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHABET[(n & 0x3f) as usize] as char);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_is_url_safe_and_long_enough() {
+        let mut buf = [0u8; 24];
+        rand::thread_rng().fill_bytes(&mut buf);
+        let s = base64_url(&buf);
+        assert!(s.len() >= 32);
+        assert!(s
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    }
+
+    #[tokio::test]
+    async fn start_returns_qr_payload_with_real_ports() {
+        let core = AppCore {
+            host: "127.0.0.1".into(),
+        };
+        let h = core.start().await.unwrap();
+        assert_eq!(h.qr.v, 1);
+        assert_ne!(h.qr.cport, 0);
+        assert_ne!(h.qr.mport, 0);
+        assert!(!h.qr.token.is_empty());
+        let s = h.snapshot.borrow().clone();
+        assert!(matches!(s.state, SessionStateKind::Listening { .. }));
+        h.shutdown();
+    }
+}
