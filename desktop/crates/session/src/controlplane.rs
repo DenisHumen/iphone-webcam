@@ -16,6 +16,11 @@ use crate::handshake::AcceptedSession;
 use crate::keepalive::{now_usec, DEAD_PEER_AFTER, KEEPALIVE_INTERVAL};
 use crate::state::{DeviceSnapshot, SessionSnapshot, SessionStateKind};
 
+/// Outbound message queue: callers send `ControlMessage`s and the ControlPlane
+/// stamps them with a fresh `seq` and writes them onto the wire.
+pub type OutboundSender = mpsc::Sender<ControlMessage>;
+pub type OutboundReceiver = mpsc::Receiver<ControlMessage>;
+
 #[derive(Debug, Clone)]
 pub enum ControlPlaneEvent {
     StateChanged(SessionStateKind),
@@ -59,7 +64,17 @@ impl ControlPlane {
     pub async fn run(
         self,
         accepted: AcceptedSession,
+        control: ControlStream,
+    ) -> Result<(), SessionError> {
+        let (_out_tx, out_rx) = mpsc::channel::<ControlMessage>(16);
+        self.run_with_outbound(accepted, control, out_rx).await
+    }
+
+    pub async fn run_with_outbound(
+        self,
+        accepted: AcceptedSession,
         mut control: ControlStream,
+        mut outbound: OutboundReceiver,
     ) -> Result<(), SessionError> {
         info!(session_id = %accepted.session_id, "control plane running");
         self.broadcast(SessionStateKind::Ready, None, None).await;
@@ -71,6 +86,15 @@ impl ControlPlane {
 
         loop {
             tokio::select! {
+                msg = outbound.recv() => {
+                    let Some(msg) = msg else { continue };
+                    seq = seq.wrapping_add(1);
+                    if let Err(e) = control.send(&ControlEnvelope { seq, ack: None, body: msg }).await {
+                        warn!(error = ?e, "outbound send failed; treating as disconnect");
+                        self.broadcast(SessionStateKind::Reconnecting, None, None).await;
+                        return Ok(());
+                    }
+                }
                 _ = keepalive.tick() => {
                     seq = seq.wrapping_add(1);
                     if let Err(e) = control.send(&ControlEnvelope {

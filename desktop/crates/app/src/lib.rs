@@ -15,12 +15,13 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use ccp_protocol::{ControlMessage, SetCamera};
 use mediapipeline::MediaPipeline;
 use rand::RngCore;
 use serde::Serialize;
 use session::{
     accept_control, read_media_hello, ControlPlane, ControlPlaneEvent, MediaBinding,
-    SessionSnapshot, SessionStateKind,
+    OutboundSender, SessionSnapshot, SessionStateKind,
 };
 use sink::FrameSink;
 use tokio::sync::{mpsc, watch, Mutex, RwLock};
@@ -46,6 +47,7 @@ pub struct AppHandle {
     pub snapshot: watch::Receiver<SessionSnapshot>,
     pub events: Arc<Mutex<mpsc::Receiver<ControlPlaneEvent>>>,
     sinks: Arc<RwLock<Vec<Arc<dyn FrameSink>>>>,
+    outbound: Arc<RwLock<Option<OutboundSender>>>,
     accept_task: JoinHandle<()>,
 }
 
@@ -59,6 +61,19 @@ impl AppHandle {
     /// called before the phone connects in Phase 2.
     pub async fn register_sink(&self, sink: Arc<dyn FrameSink>) {
         self.sinks.write().await.push(sink);
+    }
+
+    /// Send `SET_CAMERA(id)` on the active session's control channel. Returns
+    /// `Err` when no session is connected.
+    pub async fn set_camera(&self, camera_id: String) -> anyhow::Result<()> {
+        let tx = {
+            let guard = self.outbound.read().await;
+            guard.clone()
+        };
+        let tx = tx.ok_or_else(|| anyhow::anyhow!("no active session"))?;
+        tx.send(ControlMessage::SetCamera(SetCamera { camera_id }))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 }
 
@@ -89,12 +104,14 @@ impl AppCore {
         });
 
         let sinks: Arc<RwLock<Vec<Arc<dyn FrameSink>>>> = Arc::new(RwLock::new(Vec::new()));
+        let outbound: Arc<RwLock<Option<OutboundSender>>> = Arc::new(RwLock::new(None));
         let accept_task = spawn_accept_loop(
             wifi_rx,
             events_tx,
             snapshot_tx,
             token.clone(),
             sinks.clone(),
+            outbound.clone(),
         );
 
         Ok(AppHandle {
@@ -108,17 +125,20 @@ impl AppCore {
             snapshot: snapshot_rx,
             events: Arc::new(Mutex::new(events_rx)),
             sinks,
+            outbound,
             accept_task,
         })
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_accept_loop(
     mut wifi_rx: mpsc::Receiver<WifiServerEvent>,
     events_tx: mpsc::Sender<ControlPlaneEvent>,
     snapshot_tx: watch::Sender<SessionSnapshot>,
     expected_token: String,
     sinks: Arc<RwLock<Vec<Arc<dyn FrameSink>>>>,
+    outbound_slot: Arc<RwLock<Option<OutboundSender>>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut pending: HashMap<(String, String), tokio::sync::oneshot::Sender<MediaStream>> =
@@ -158,10 +178,16 @@ fn spawn_accept_loop(
                                 }
                             });
                             let cp = ControlPlane::new(events_tx.clone(), snapshot_tx.clone());
+                            let (out_tx, out_rx) = mpsc::channel::<ControlMessage>(16);
+                            *outbound_slot.write().await = Some(out_tx);
+                            let outbound_slot_for_session = outbound_slot.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = cp.run(acc, cs).await {
+                                if let Err(e) = cp.run_with_outbound(acc, cs, out_rx).await {
                                     warn!(error = ?e, "control plane exited");
                                 }
+                                // Clear the outbound slot so set_camera returns "no active session"
+                                // until the next handshake re-populates it.
+                                *outbound_slot_for_session.write().await = None;
                             });
                         }
                         Err(e) => {

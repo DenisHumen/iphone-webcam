@@ -32,6 +32,7 @@ pub fn run() {
             commands::start_server,
             commands::stop_server,
             commands::get_snapshot,
+            commands::set_camera,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ClearCam application");

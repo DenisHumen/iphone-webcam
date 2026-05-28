@@ -1,4 +1,5 @@
 import type { DeviceSnapshot, Telemetry } from "../lib/types";
+import CameraPicker from "./CameraPicker";
 
 function fmtPct(x: number): string {
   return `${Math.round(x * 100)}%`;
@@ -20,9 +21,13 @@ function thermalLabel(t: Telemetry["thermalState"]): string {
 export default function DeviceCard({
   device,
   telemetry,
+  activeCameraId,
+  onCameraChange,
 }: {
   device: DeviceSnapshot;
   telemetry: Telemetry | null;
+  activeCameraId: string | null;
+  onCameraChange: (id: string) => void;
 }) {
   const battery = telemetry ? telemetry.batteryLevel : device.battery_level;
   return (
@@ -36,6 +41,8 @@ export default function DeviceCard({
           <span className="rounded-full bg-sky-900 px-2 py-0.5 text-xs text-sky-200">USB 3</span>
         )}
       </header>
+
+      <CameraPicker cameras={device.cameras} activeId={activeCameraId} onChange={onCameraChange} />
 
       <div className="grid grid-cols-3 gap-3 text-sm">
         <Metric label="Батарея" value={fmtPct(battery)} />

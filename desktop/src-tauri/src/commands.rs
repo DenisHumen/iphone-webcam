@@ -82,6 +82,15 @@ pub async fn get_snapshot(state: State<'_, AppState>) -> Result<SessionSnapshot,
         .map_or_else(SessionSnapshot::idle, |h| h.snapshot.borrow().clone()))
 }
 
+#[tauri::command]
+pub async fn set_camera(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let guard = state.lock().await;
+    match guard.as_ref() {
+        Some(h) => h.set_camera(id).await.map_err(|e| format!("{e}")),
+        None => Err("no active session".into()),
+    }
+}
+
 fn local_host() -> Option<String> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("1.1.1.1:80").ok()?;

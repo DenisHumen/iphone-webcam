@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import DeviceCard from "./components/DeviceCard";
 import ErrorBanner from "./components/ErrorBanner";
+import PreviewCanvas from "./components/PreviewCanvas";
 import ServerCard from "./components/ServerCard";
 import StatusBadge from "./components/StatusBadge";
 import {
@@ -19,6 +20,7 @@ export default function App() {
   const [state, setState] = useState<SessionStateKind>({ kind: "idle" });
   const [device, setDevice] = useState<DeviceSnapshot | null>(null);
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
+  const [activeCameraId, setActiveCameraId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -32,13 +34,22 @@ export default function App() {
         setDevice(snap.device);
         setTelemetry(snap.last_telemetry);
         off.push(await onSessionState((s) => setState(s)));
-        off.push(await onDevice((d) => setDevice(d)));
+        off.push(
+          await onDevice((d) => {
+            setDevice(d);
+            // first time we see cameras, pick the first as active.
+            if (d.cameras.length > 0 && !activeCameraId) {
+              setActiveCameraId(d.cameras[0].id);
+            }
+          }),
+        );
         off.push(await onTelemetry((t) => setTelemetry(t)));
         off.push(
           await onClosed((reason) => {
             setError(`Сессия закрыта: ${reason}`);
             setDevice(null);
             setTelemetry(null);
+            setActiveCameraId(null);
           }),
         );
       } catch (e) {
@@ -49,7 +60,7 @@ export default function App() {
       cancelled = true;
       for (const f of off) f();
     };
-  }, []);
+  }, [activeCameraId]);
 
   async function handleStart() {
     setError(null);
@@ -67,6 +78,7 @@ export default function App() {
       setState({ kind: "idle" });
       setDevice(null);
       setTelemetry(null);
+      setActiveCameraId(null);
     } catch (e) {
       setError(String(e));
     }
@@ -77,11 +89,11 @@ export default function App() {
 
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-100 px-6 py-10">
-      <div className="mx-auto w-full max-w-2xl space-y-6">
+      <div className="mx-auto w-full max-w-3xl space-y-6">
         <header className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold">ClearCam</h1>
-            <p className="text-sm text-neutral-400">iPhone-as-webcam · Phase 1</p>
+            <p className="text-sm text-neutral-400">iPhone-as-webcam · Phase 2</p>
           </div>
           <StatusBadge state={state} />
         </header>
@@ -101,7 +113,17 @@ export default function App() {
         )}
 
         {showServer && qr && <ServerCard qr={qr} onStop={handleStop} />}
-        {showDevice && device && <DeviceCard device={device} telemetry={telemetry} />}
+        {showDevice && device && (
+          <>
+            <PreviewCanvas />
+            <DeviceCard
+              device={device}
+              telemetry={telemetry}
+              activeCameraId={activeCameraId}
+              onCameraChange={setActiveCameraId}
+            />
+          </>
+        )}
       </div>
     </main>
   );

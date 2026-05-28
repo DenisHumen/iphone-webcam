@@ -53,3 +53,11 @@ export type QrPayloadOut = {
   token: string;
   svg: string;
 };
+
+export type PreviewFrame = {
+  seq: number;
+  ptsUsec: number;
+  width: number;
+  height: number;
+  jpegBase64: string;
+};
