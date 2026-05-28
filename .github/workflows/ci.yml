@@ -48,6 +48,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: cargo test
         run: cargo test --workspace --all-targets
+      - name: mock-iphone smoke
+        run: cargo run -p mock-iphone -- --help
 
   ui:
     name: UI (TypeScript / Vite)
@@ -77,7 +79,7 @@ jobs:
         run: pnpm build
 
   swift:
-    name: Swift (ClearCamProtocol)
+    name: Swift (ClearCamProtocol + ClearCamCore)
     runs-on: macos-latest
     defaults:
       run:
@@ -90,3 +92,5 @@ jobs:
         run: swift build
       - name: swift test
         run: swift test
+      - name: swift build ClearCamAppKit (iOS-only sources gated by #if)
+        run: swift build --target ClearCamAppKit
