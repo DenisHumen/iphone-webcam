@@ -15,7 +15,8 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use ccp_protocol::{ControlMessage, SetCamera};
+use adaptive::{select_mode, AvailableMode, Measurement, TransportClass, UserLimits};
+use ccp_protocol::{Capability, ControlMessage, Mode, SetCamera};
 use decode::{Decoder, PassthroughDecoder};
 use mediapipeline::MediaPipeline;
 use rand::RngCore;
@@ -76,6 +77,89 @@ impl AppHandle {
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
+
+    /// Run an in-process speedtest stub. Phase 4 returns a measurement based
+    /// on the most recent telemetry (sent_bitrate as a proxy for goodput);
+    /// the full ramp-over-media-socket implementation lands in Phase 6 polish.
+    /// Recommendation is computed via `adaptive::select_mode`.
+    pub async fn run_speedtest(&self) -> anyhow::Result<SpeedtestOutcome> {
+        let snap = self.snapshot.borrow().clone();
+        let goodput_mbps = snap
+            .last_telemetry
+            .as_ref()
+            .map(|t| f64::from(t.sent_bitrate_kbps) / 1000.0)
+            .unwrap_or(50.0); // sensible default when no telemetry yet
+        let measurement = Measurement {
+            goodput_mbps: goodput_mbps.max(10.0),
+            rtt_ms: 5.0,
+            jitter_ms: 1.0,
+            loss_pct: 0.0,
+        };
+        let cameras = snap
+            .device
+            .as_ref()
+            .map(|d| d.cameras.clone())
+            .unwrap_or_default();
+        let caps: Vec<AvailableMode> = if cameras.is_empty() {
+            default_iphone_caps()
+        } else {
+            cameras
+                .into_iter()
+                .map(|c| AvailableMode {
+                    width: c.max_width,
+                    height: c.max_height,
+                    fps: c.max_fps,
+                    caps: vec![Capability::Hevc, Capability::H264, Capability::RawNv12],
+                })
+                .collect()
+        };
+        let recommended = select_mode(
+            &measurement,
+            &caps,
+            TransportClass::WiFi,
+            &UserLimits::default(),
+        );
+        Ok(SpeedtestOutcome {
+            measurement,
+            recommended,
+        })
+    }
+}
+
+fn default_iphone_caps() -> Vec<AvailableMode> {
+    let caps = vec![Capability::Hevc, Capability::H264, Capability::RawNv12];
+    vec![
+        AvailableMode {
+            width: 1280,
+            height: 720,
+            fps: 30,
+            caps: caps.clone(),
+        },
+        AvailableMode {
+            width: 1280,
+            height: 720,
+            fps: 60,
+            caps: caps.clone(),
+        },
+        AvailableMode {
+            width: 1920,
+            height: 1080,
+            fps: 30,
+            caps: caps.clone(),
+        },
+        AvailableMode {
+            width: 1920,
+            height: 1080,
+            fps: 60,
+            caps,
+        },
+    ]
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SpeedtestOutcome {
+    pub measurement: Measurement,
+    pub recommended: Mode,
 }
 
 impl AppCore {
