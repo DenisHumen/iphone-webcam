@@ -5,6 +5,11 @@ version = 3
 [[package]]
 name = "adaptive"
 version = "0.1.0"
+dependencies = [
+ "ccp-protocol",
+ "serde",
+ "tracing",
+]
 
 [[package]]
 name = "adler2"

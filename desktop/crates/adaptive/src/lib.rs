@@ -1,6 +1,9 @@
-//! `adaptive` — stub crate for Phase 0.
-//!
-//! See `docs/02-architecture.md` for the planned responsibilities of this module.
-//! Implementation lands in later phases per `docs/10-roadmap-and-plan.md`.
+//! `adaptive` — bitrate tables + mode selection + speedtest + adaptation loop.
 
 #![forbid(unsafe_code)]
+
+pub mod tables;
+pub mod types;
+
+pub use tables::{h264_target_kbps, hevc_target_kbps, raw_bitrate_kbps};
+pub use types::{AvailableMode, Measurement, TransportClass, UserLimits};
