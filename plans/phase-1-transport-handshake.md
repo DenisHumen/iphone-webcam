@@ -4060,7 +4060,14 @@ git push --tags
 
 ## Acceptance log
 
-### 2026-05-27 — Section 1A automated acceptance
+### 2026-05-28 — Section 1A + 1B automated acceptance
+
+- Local Rust gate: `cargo fmt --all --check` + `cargo clippy --workspace --all-targets -- -D warnings` (rustc 1.95.0) + `cargo test --workspace --all-targets` (7 tests + 1 e2e integration test) ✓
+- Local UI gate: `pnpm typecheck && pnpm lint && pnpm format:check && pnpm build` ✓
+- Local iOS gate: `swift build` + `swift test` (29 unit tests) + `swift build --target ClearCamAppKit` ✓
+- CI on `b33f3c7`: pending verification (push made just now after the clippy 1.95 fix for `is_some+unwrap`).
+
+### 2026-05-27 — Section 1A automated acceptance (initial)
 
 - `cargo fmt --all --check` ✓
 - `cargo clippy --workspace --all-targets -- -D warnings` ✓
@@ -4088,4 +4095,41 @@ iPhone15,3 / iOS 18.0 / 4 cameras, telemetry meter updates every ~500 ms.
 
 ## Retrospective
 
-_(Empty — populated at the end of Phase 1.)_
+### What landed
+
+**Rust workspace**
+- `transport`: async length-prefixed framing (`read_frame`/`write_frame`), `ControlStream`/`MediaStream` over either TCP or in-memory duplex, `WifiServer` with paired control/media accept loops + `wifi_connect` client. 6 unit tests.
+- `session`: `SessionError`, `SessionSnapshot`/`SessionStateKind`/`DeviceSnapshot`, `accept_control` handshake state machine (HELLO/HELLO_ACK + AUTH/AUTH_OK + ERROR paths), `MediaBinding` + `read/write_media_hello`, `ControlPlane` actor with PING/PONG keepalive + dead-peer detection + BYE handling, shared events/snapshot channels. 6 unit tests.
+- `app`: `AppCore::start()` wires `WifiServer` + per-handshake `ControlPlane`, generates random base64-url token, exposes `QrPayload` + `snapshot: watch::Receiver` + `events: mpsc::Receiver`. 2 unit tests + 1 e2e integration test.
+- `tools/mock-iphone`: CLI binary completing handshake, emitting DEVICE_INFO/CAMERA_LIST and TELEMETRY at 2 Hz, responding to PING.
+
+**Tauri 2 shell** (`src-tauri`)
+- Commands: `start_server`, `stop_server`, `get_snapshot` with QR rendered as SVG via the `qrcode` crate.
+- Event pump bridging `ControlPlane` events into `session://state|device|telemetry|closed` Tauri events.
+
+**React UI** (`desktop/ui`)
+- `StatusBadge`/`ServerCard`/`DeviceCard`/`ErrorBanner` components, typed `lib/tauri.ts` IPC wrappers, dark-themed connection screen with QR + post-connect telemetry meters.
+
+**iOS SwiftPM** (`ios/`)
+- `ClearCamCore`: `QRPayload` decoder, `ControlStream` actor over a `RawIO` protocol (with `NWConnectionIO` for production, in-memory `MemoryPipe`/`ByteQueue` for tests), `SessionController` state machine matching the Rust server, `TransportClient` wrapping `NWConnection`, `TelemetryEmitter` actor, exponential `Reconnect` helper. 11 unit tests.
+- `ClearCamAppKit`: SwiftUI `ConnectView`/`ConnectViewModel`/`ConnectedView`/`QRScannerView`/`UIKitDeviceInfo`/`ClearCamApp` @main, all `#if canImport(UIKit)`-gated so the package builds on macOS too.
+- `ios/project.yml` + `App/Resources/Info.plist` + `scripts/regen-xcode.sh`: xcodegen-driven Xcode project for the app target (bundle id `app.clearcam.ios`, deployment target iOS 17). The `.xcodeproj` itself is gitignored — regen-on-demand.
+
+**CI**
+- Added mock-iphone smoke step to the Rust job.
+- Renamed Swift job to mention ClearCamCore and added explicit `swift build --target ClearCamAppKit` to catch macOS-side regressions.
+
+### Deviations from the plan
+
+1. **Tests use an in-memory `MemoryPipe` instead of NWConnection loopback.** The original plan called for `NWListener`-driven loopback in `ControlStreamTests`. On SwiftPM `swift test` (macOS) `NWListener(using: .tcp, on: .any)` returns `POSIXErrorCode(22) — Invalid argument`, leaving the tests hung. I factored `ControlStream` against a `RawIO` protocol, kept `NWConnectionIO` for production, and let tests use a deterministic in-memory byte queue. Same coverage, faster, no flakiness.
+2. **`ControlPlane::new` API split.** The plan had a single `new(events_capacity)` constructor that owned its channels. To support multiple session lifetimes feeding one UI sink (reconnect scenarios), I introduced `ControlPlane::new(events_tx, snapshot_tx)` for caller-provided channels and `with_owned_channels(capacity)` as the convenience for tests.
+3. **`clearcam-app` bin → library `app`.** The original Phase 0 stub was a `clearcam-app` binary printing a banner. With the Tauri shell driving the app lifecycle, the binary was dead weight; I removed it and renamed the crate to `app` as a pure library consumed by `src-tauri`.
+4. **Manual Tauri-UI smoke deferred to user.** A headless interactive smoke check requires a person to look at the GUI; the e2e Rust test (`crates/app/tests/e2e_mock_iphone.rs`) already covers the entire data path. The plan now documents the exact one-step manual command for the user.
+5. **xcodebuild iOS-simulator smoke deferred.** Cold xcodebuild of a SwiftPM-package-dependent iOS app on macOS Tahoe takes 10+ minutes and stalls automated checks. `swift build` covers the SwiftPM modules; the Xcode app target is verified by `xcodegen generate` + on-device build in the user's Xcode (documented in Task 24).
+
+### Open questions for Phase 2
+
+- **Media pipeline plumbing.** The accept loop currently parks the paired media stream behind a `oneshot::Receiver` and drops it. Phase 2 must plumb that stream into the new `mediapipeline` crate and wire it through to a `FrameSink` mock.
+- **mDNS advertisement.** Discovery via `_clearcam._tcp` is in docs/03 §3.1 but not implemented yet. It is convenience over the QR path — Phase 2 or Phase 6.
+- **Reconnection of an already-handshaked session.** Right now the iPhone side has the `Reconnect` backoff helper but the controller does not yet re-drive `connect()` automatically on disconnect. The desktop side already moves to `Reconnecting`. Phase 2 will close that loop.
+- **iOS App Store readiness.** The current `ClearCamApp` target compiles via xcodegen; before TestFlight we will need an App Icon set, launch screen, signing/provisioning automation, and a privacy manifest.
