@@ -2,6 +2,7 @@
 
 mod commands;
 mod events;
+mod preview;
 
 use std::sync::Arc;
 

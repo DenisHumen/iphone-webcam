@@ -3,8 +3,10 @@ use std::sync::Arc;
 use app::{AppCore, AppHandle};
 use serde::Serialize;
 use session::SessionSnapshot;
-use tauri::State;
+use tauri::{AppHandle as TauriAppHandle, State};
 use tokio::sync::Mutex;
+
+use crate::preview::PreviewSink;
 
 pub type AppState = Arc<Mutex<Option<AppHandle>>>;
 
@@ -19,7 +21,10 @@ pub struct QrPayloadOut {
 }
 
 #[tauri::command]
-pub async fn start_server(state: State<'_, AppState>) -> Result<QrPayloadOut, String> {
+pub async fn start_server(
+    app: TauriAppHandle,
+    state: State<'_, AppState>,
+) -> Result<QrPayloadOut, String> {
     let mut guard = state.lock().await;
     if guard.is_some() {
         return Err("server already running".into());
@@ -29,6 +34,12 @@ pub async fn start_server(state: State<'_, AppState>) -> Result<QrPayloadOut, St
         .start()
         .await
         .map_err(|e| format!("{e:?}"))?;
+
+    // Register the preview sink before the phone connects so the very first
+    // MediaPipeline picks it up.
+    let preview = PreviewSink::new(app.clone());
+    handle.register_sink(preview).await;
+
     let payload_json = serde_json::json!({
         "v": handle.qr.v,
         "host": handle.qr.host,
