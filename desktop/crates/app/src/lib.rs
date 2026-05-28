@@ -1,10 +1,13 @@
-//! `app` — top-level wiring of transport + session for Phase 1.
+//! `app` — top-level wiring of transport + session + media pipeline for Phase 2.
 //!
 //! Public API:
 //!   - `AppCore::start()` — bind ports, run accept loop, return handle.
 //!   - `AppHandle::snapshot` — current `SessionSnapshot` watch receiver.
 //!   - `AppHandle::events` — mpsc receiver of `ControlPlaneEvent`s.
 //!   - `AppHandle::qr` — payload to embed in the QR code.
+//!   - `AppHandle::register_sink(sink)` — add a `FrameSink` consumer that
+//!     receives frames once the next media handshake completes. Call before
+//!     a phone connects; Phase 2 keeps a single active session.
 
 #![forbid(unsafe_code)]
 
@@ -12,13 +15,15 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use mediapipeline::MediaPipeline;
 use rand::RngCore;
 use serde::Serialize;
 use session::{
     accept_control, read_media_hello, ControlPlane, ControlPlaneEvent, MediaBinding,
     SessionSnapshot, SessionStateKind,
 };
-use tokio::sync::{mpsc, watch, Mutex};
+use sink::FrameSink;
+use tokio::sync::{mpsc, watch, Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use transport::{BoundPortsWithListeners, MediaStream, WifiServerEvent};
@@ -40,6 +45,7 @@ pub struct AppHandle {
     pub qr: QrPayload,
     pub snapshot: watch::Receiver<SessionSnapshot>,
     pub events: Arc<Mutex<mpsc::Receiver<ControlPlaneEvent>>>,
+    sinks: Arc<RwLock<Vec<Arc<dyn FrameSink>>>>,
     accept_task: JoinHandle<()>,
 }
 
@@ -47,6 +53,12 @@ impl AppHandle {
     /// Abort the background accept loop. Sockets close when the task drops.
     pub fn shutdown(&self) {
         self.accept_task.abort();
+    }
+
+    /// Register a `FrameSink` for the next session's MediaPipeline. Must be
+    /// called before the phone connects in Phase 2.
+    pub async fn register_sink(&self, sink: Arc<dyn FrameSink>) {
+        self.sinks.write().await.push(sink);
     }
 }
 
@@ -76,7 +88,14 @@ impl AppCore {
             last_telemetry: None,
         });
 
-        let accept_task = spawn_accept_loop(wifi_rx, events_tx, snapshot_tx, token.clone());
+        let sinks: Arc<RwLock<Vec<Arc<dyn FrameSink>>>> = Arc::new(RwLock::new(Vec::new()));
+        let accept_task = spawn_accept_loop(
+            wifi_rx,
+            events_tx,
+            snapshot_tx,
+            token.clone(),
+            sinks.clone(),
+        );
 
         Ok(AppHandle {
             qr: QrPayload {
@@ -88,6 +107,7 @@ impl AppCore {
             },
             snapshot: snapshot_rx,
             events: Arc::new(Mutex::new(events_rx)),
+            sinks,
             accept_task,
         })
     }
@@ -98,6 +118,7 @@ fn spawn_accept_loop(
     events_tx: mpsc::Sender<ControlPlaneEvent>,
     snapshot_tx: watch::Sender<SessionSnapshot>,
     expected_token: String,
+    sinks: Arc<RwLock<Vec<Arc<dyn FrameSink>>>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut pending: HashMap<(String, String), tokio::sync::oneshot::Sender<MediaStream>> =
@@ -121,9 +142,19 @@ fn spawn_accept_loop(
                             let auth_token = acc.token.clone();
                             let (tx_media, rx_media) = tokio::sync::oneshot::channel();
                             pending.insert((session_id.clone(), auth_token.clone()), tx_media);
+                            let sinks_for_session = sinks.clone();
                             tokio::spawn(async move {
-                                if let Ok(_ms) = rx_media.await {
-                                    info!(%session_id, "media stream attached (parked for Phase 2)");
+                                if let Ok(ms) = rx_media.await {
+                                    let snapshot: Vec<_> =
+                                        sinks_for_session.read().await.iter().cloned().collect();
+                                    info!(
+                                        %session_id,
+                                        sink_count = snapshot.len(),
+                                        "media stream attached; starting MediaPipeline"
+                                    );
+                                    let _pipeline = MediaPipeline::spawn(ms, snapshot);
+                                    // Pipeline owns its task; let it run for the lifetime of the
+                                    // socket. Phase 2 single-session — Phase 6 will manage it.
                                 }
                             });
                             let cp = ControlPlane::new(events_tx.clone(), snapshot_tx.clone());
