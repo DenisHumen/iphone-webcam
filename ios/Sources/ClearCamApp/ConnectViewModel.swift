@@ -1,6 +1,8 @@
 #if canImport(UIKit)
+    import AVFoundation
     import ClearCamCore
     import ClearCamProtocol
+    import CoreVideo
     import Foundation
     import SwiftUI
 
@@ -16,6 +18,7 @@
         private let infoProvider: any DeviceInfoProvider
         private var controller: SessionController?
         private var telemetryEmitter: TelemetryEmitter?
+        private var captureEngine: AVCaptureEngine?
 
         public init(infoProvider: any DeviceInfoProvider = UIKitDeviceInfo()) {
             self.infoProvider = infoProvider
@@ -41,6 +44,7 @@
             telemetryEmitter = nil
             await controller?.disconnect(reason: "user")
             controller = nil
+            captureEngine = nil
             sessionId = nil
             payload = nil
             state = .idle
@@ -62,11 +66,42 @@
                 let sid = try await controller.connect(token: payload.token)
                 sessionId = sid
                 state = .ready(sessionId: sid)
+                try await wireCamera(controller: controller)
                 startTelemetry(controller: controller)
             } catch {
                 self.error = "Ошибка: \(error)"
                 state = .stopped(reason: "\(error)")
             }
+        }
+
+        /// Construct an AVCaptureEngine whose onFrame callback packs the
+        /// CVPixelBuffer and writes it via `controller.sendCapturedNV12`, then
+        /// hand the engine + discovery to the controller and publish
+        /// CAMERA_LIST.
+        private func wireCamera(controller: SessionController) async throws {
+            let engine = AVCaptureEngine { [weak controller] pixelBuffer, pts in
+                guard let controller else { return }
+                let ptsUsec = UInt64(max(0, CMTimeGetSeconds(pts)) * 1_000_000)
+                guard
+                    let packed = try? CVPixelBufferPacker.packNV12(
+                        pixelBuffer, seq: 0, ptsUsec: ptsUsec)
+                else { return }
+                let y = packed.payload.prefix(Int(packed.header.width) * Int(packed.header.height))
+                let uv = packed.payload.suffix(
+                    Int(packed.header.width) * Int(packed.header.height) / 2)
+                Task { [weak controller] in
+                    try? await controller?.sendCapturedNV12(
+                        y: Data(y),
+                        uv: Data(uv),
+                        width: packed.header.width,
+                        height: packed.header.height,
+                        ptsUsec: ptsUsec,
+                        fullRange: true)
+                }
+            }
+            captureEngine = engine
+            await controller.attachCameraSystem(engine: engine, discovery: AVCameraDiscovery())
+            try await controller.publishCameraListAndStart()
         }
 
         private func startTelemetry(controller: SessionController) {

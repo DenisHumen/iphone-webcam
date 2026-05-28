@@ -59,6 +59,13 @@ public actor ControlStream {
         }
     }
 
+    /// Write raw bytes onto the underlying socket without length prefixing.
+    /// Used for media frames after MEDIA_HELLO completes — each call writes a
+    /// `[28-byte MediaHeader][payload]` record per docs/03 §5.2.
+    public func sendRaw(_ data: Data) async throws {
+        try await io.sendData(data)
+    }
+
     public func cancel() {
         io.cancel()
     }

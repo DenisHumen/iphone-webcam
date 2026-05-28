@@ -19,11 +19,12 @@ public actor SessionController {
     private let controlChannel: ControlStream
     private let mediaChannel: ControlStream
     private let deviceInfo: any DeviceInfoProvider
-    private let cameraDiscovery: (any CameraDiscovery)?
-    private let captureEngine: (any CaptureEngine)?
+    private var cameraDiscovery: (any CameraDiscovery)?
+    private var captureEngine: (any CaptureEngine)?
     private let appName: String
 
     private var seq: UInt64 = 0
+    private var mediaSeq: UInt32 = 0
     private var pumpTask: Task<Void, Never>?
 
     public init(
@@ -44,6 +45,36 @@ public actor SessionController {
 
     public func observeState(_ block: @Sendable (SessionState) -> Void) {
         block(state)
+    }
+
+    /// Attach a capture engine + discovery after `init`. Use this when the
+    /// engine's `onFrame` closure needs to reference the SessionController
+    /// (factory chicken-and-egg). Must be called before `connect()` OR
+    /// followed by an explicit `publishCameraList()` if the session is already
+    /// `.ready`.
+    public func attachCameraSystem(
+        engine: any CaptureEngine,
+        discovery: any CameraDiscovery
+    ) {
+        captureEngine = engine
+        cameraDiscovery = discovery
+    }
+
+    /// Send CAMERA_LIST + start the first back camera. Idempotent; safe to call
+    /// once after `attachCameraSystem` if the engine was wired post-connect.
+    public func publishCameraListAndStart() async throws {
+        guard let discovery = cameraDiscovery else { return }
+        let cameras = discovery.discover()
+        seq += 1
+        try await controlChannel.send(
+            ControlEnvelope(
+                seq: seq, ack: nil,
+                body: .cameraList(CameraList(cameras: cameras))))
+        let first = cameras.first(where: { $0.position == .back }) ?? cameras.first
+        if let first, let engine = captureEngine, activeCameraId == nil {
+            try await engine.start(cameraId: first.id)
+            activeCameraId = first.id
+        }
     }
 
     /// Drive the handshake to `.ready`. Returns the assigned `sessionId` on success.
@@ -116,19 +147,9 @@ public actor SessionController {
         try await controlChannel.send(
             ControlEnvelope(seq: seq, ack: nil, body: .deviceInfo(snap)))
 
-        // CAMERA_LIST (if a discovery is wired) + auto-start the first camera.
-        if let discovery = cameraDiscovery {
-            let cameras = discovery.discover()
-            seq += 1
-            try await controlChannel.send(
-                ControlEnvelope(
-                    seq: seq, ack: nil,
-                    body: .cameraList(CameraList(cameras: cameras))))
-            let first = cameras.first(where: { $0.position == .back }) ?? cameras.first
-            if let first, let engine = captureEngine {
-                try await engine.start(cameraId: first.id)
-                activeCameraId = first.id
-            }
+        // CAMERA_LIST + auto-start the first camera (if discovery is wired).
+        if cameraDiscovery != nil {
+            try await publishCameraListAndStart()
         }
 
         state = .ready(sessionId: sid)
@@ -174,6 +195,28 @@ public actor SessionController {
                 seq: seq, ack: peerSeq,
                 body: .cameraState(
                     CameraState(activeCameraId: cameraId, appliedFormat: "raw nv12"))))
+    }
+
+    /// Pack a captured NV12 frame and write it onto the media channel.
+    ///
+    /// Callers (`AVCaptureEngine`'s `onFrame` callback) hand off the bytes;
+    /// SessionController stamps the sequence number, encodes the 28-byte
+    /// header, and writes one record per call.
+    public func sendCapturedNV12(
+        y: Data,
+        uv: Data,
+        width: UInt16,
+        height: UInt16,
+        ptsUsec: UInt64,
+        fullRange: Bool = true
+    ) async throws {
+        mediaSeq &+= 1
+        let packed = try RawEncoder.packNV12(
+            y: y, uv: uv,
+            width: width, height: height,
+            seq: mediaSeq, ptsUsec: ptsUsec,
+            fullRange: fullRange)
+        try await mediaChannel.sendRaw(packed.wireBytes())
     }
 
     /// Emit a TELEMETRY envelope. Caller drives the schedule.
