@@ -381,6 +381,7 @@ dependencies = [
  "app",
  "async-trait",
  "base64 0.22.1",
+ "bytes",
  "ccp-protocol",
  "image",
  "qrcode",
