@@ -324,8 +324,50 @@ public struct EncodedAU: Sendable {
 
 ## Acceptance log
 
-_(populated as the plan executes)_
+### 2026-05-28 — Section 4A + 4B (stub) + 4C + minimal D/E
+
+**Rust adaptive (`crates/adaptive`)** — 20 unit tests covering bitrate tables, mode selection, adaptation hysteresis/cooldown, and speedtest aggregation.
+
+**Rust decode** — `Decoder` trait + `PassthroughDecoder` (CI-friendly stub).
+
+**Rust mediapipeline** — routes by `Codec`; RAW and ENCODED both land at the same `FrameSink` fanout. Config frames swallowed.
+
+**Rust app** — `AppHandle::run_speedtest()` returns `SpeedtestOutcome { measurement, recommended }` using `select_mode`.
+
+**Tauri** — `run_speedtest` command + `MediaPipeline` wired with `PassthroughDecoder`.
+
+**iOS** — `Encoder` protocol with `EncoderMode`/`EncodedAU`/`wireBody()` + `StubEncoder`. 2 new tests.
+
+**UI** — `SpeedtestPanel` shows goodput/RTT/recommended mode.
+
+Gates: `cargo fmt/clippy/test` ✓ ; `pnpm typecheck/lint/format/build` ✓ ; `swift test` (36 tests) ✓.
+
+### Deferred to Phase 6 polish
+
+- Live ramp generator over the media socket (mock-iphone + per-step counter).
+- VideoToolbox `VTEncoder` (iOS) and `VideoToolboxDecoder` (macOS).
+- ffmpeg-based decoder (Linux/Win).
+- Adaptation loop wired to live telemetry in `AppCore` + `SET_MODE` emission + UI banners.
+- Real `MODE_APPLIED` handling on iOS.
 
 ## Retrospective
 
-_(populated at end of Phase 4)_
+### What landed
+
+- `adaptive::select_mode` — docs/06 §4 algorithm with 6 unit tests pinning behavior to docs/06 §2 numbers.
+- `adaptive::AdaptationState` — asymmetric step-up/step-down with hysteresis; `new_at` for deterministic tests.
+- `adaptive::speedtest::evaluate` — picks highest sustained step where throughput matches target and RTT didn't double.
+- `decode::PassthroughDecoder` keeps CI hermetic; real VT/ffmpeg slot behind the same trait in Phase 6.
+- `mediapipeline` routes by codec — both paths funnel through the same `FrameSink`.
+- iOS `Encoder` protocol with NAL wire format per docs/03 §5.2; `StubEncoder` exercises it headlessly.
+
+### Deviations from the plan
+
+1. **Speedtest is a stub** — full ramp generator pulls in mock-iphone + media-pipeline tap; deferred. The stub still routes a real `Measurement` through `select_mode`.
+2. **`VTEncoder` not implemented** — `StubEncoder` lets SessionController integrate the `Encoder` protocol without VideoToolbox. Production encoder lands when on-device testing is in scope.
+3. **No adaptation loop in `AppCore`** — state machine works in isolation; wiring to live telemetry is Phase 6.
+
+### Open questions
+
+- Calibrate adaptation thresholds (queue-depth, RTT-factor) on a real Wi-Fi link before tagging v1.
+- `select_mode` should consult thermal/battery state per docs/06 §6 — easy as a final user-limit override.
