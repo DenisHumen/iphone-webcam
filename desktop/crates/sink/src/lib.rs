@@ -1,6 +1,9 @@
-//! `sink` — stub crate for Phase 0.
-//!
-//! See `docs/02-architecture.md` for the planned responsibilities of this module.
-//! Implementation lands in later phases per `docs/10-roadmap-and-plan.md`.
+//! `sink` — canonical Frame type + async FrameSink trait.
 
 #![forbid(unsafe_code)]
+
+pub mod frame;
+mod sink_trait;
+
+pub use frame::Frame;
+pub use sink_trait::FrameSink;
