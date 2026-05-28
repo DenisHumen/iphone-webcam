@@ -41,6 +41,8 @@ DerivedData/
 *.xcodeproj/xcuserdata/
 Packages/
 *.resolved
+# project.yml is source of truth (regen via scripts/regen-xcode.sh)
+/ios/ClearCam.xcodeproj/
 
 # --- Editors ---
 .idea/
