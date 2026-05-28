@@ -6,6 +6,7 @@ import type {
   QrPayloadOut,
   SessionSnapshot,
   SessionStateKind,
+  SpeedtestOutcome,
   Telemetry,
 } from "./types";
 
@@ -43,4 +44,8 @@ export async function onPreviewFrame(cb: (f: PreviewFrame) => void): Promise<Unl
 
 export async function setCamera(id: string): Promise<void> {
   return invoke("set_camera", { id });
+}
+
+export async function runSpeedtest(): Promise<SpeedtestOutcome> {
+  return invoke("run_speedtest");
 }

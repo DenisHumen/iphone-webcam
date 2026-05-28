@@ -61,3 +61,30 @@ export type PreviewFrame = {
   height: number;
   jpegBase64: string;
 };
+
+export type FormatKind = "raw" | "encoded";
+export type CodecName = "none" | "hevc" | "h264";
+export type PixelFormat = "nv12";
+
+export type Mode = {
+  format: FormatKind;
+  codec: CodecName;
+  width: number;
+  height: number;
+  fps: number;
+  bitrateKbps: number;
+  pixelFormat: PixelFormat;
+  fullRange: boolean;
+};
+
+export type Measurement = {
+  goodput_mbps: number;
+  rtt_ms: number;
+  jitter_ms: number;
+  loss_pct: number;
+};
+
+export type SpeedtestOutcome = {
+  measurement: Measurement;
+  recommended: Mode;
+};

@@ -3,6 +3,7 @@ import DeviceCard from "./components/DeviceCard";
 import ErrorBanner from "./components/ErrorBanner";
 import PreviewCanvas from "./components/PreviewCanvas";
 import ServerCard from "./components/ServerCard";
+import SpeedtestPanel from "./components/SpeedtestPanel";
 import StatusBadge from "./components/StatusBadge";
 import {
   getSnapshot,
@@ -93,7 +94,7 @@ export default function App() {
         <header className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold">ClearCam</h1>
-            <p className="text-sm text-neutral-400">iPhone-as-webcam · Phase 2</p>
+            <p className="text-sm text-neutral-400">iPhone-as-webcam · Phase 4</p>
           </div>
           <StatusBadge state={state} />
         </header>
@@ -116,6 +117,7 @@ export default function App() {
         {showDevice && device && (
           <>
             <PreviewCanvas />
+            <SpeedtestPanel />
             <DeviceCard
               device={device}
               telemetry={telemetry}
