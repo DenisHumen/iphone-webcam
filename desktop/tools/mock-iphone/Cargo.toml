@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "Mock iPhone client used by integration tests and manual checks (Phase 1)"
+description = "Mock iPhone client used by integration tests and manual checks (Phase 2)"
 
 [[bin]]
 name = "mock-iphone"
@@ -15,6 +15,7 @@ path = "src/main.rs"
 ccp-protocol = { path = "../../crates/ccp-protocol" }
 transport = { path = "../../crates/transport" }
 session = { path = "../../crates/session" }
+mediapipeline = { path = "../../crates/mediapipeline" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
