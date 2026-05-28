@@ -13,6 +13,8 @@ transport = { path = "../transport" }
 session = { path = "../session" }
 sink = { path = "../sink" }
 mediapipeline = { path = "../mediapipeline" }
+decode = { path = "../decode" }
+adaptive = { path = "../adaptive" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }

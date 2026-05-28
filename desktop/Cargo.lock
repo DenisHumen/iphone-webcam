@@ -60,10 +60,12 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 name = "app"
 version = "0.1.0"
 dependencies = [
+ "adaptive",
  "anyhow",
  "async-trait",
  "bytes",
  "ccp-protocol",
+ "decode",
  "mediapipeline",
  "qrcode",
  "rand",
@@ -591,6 +593,14 @@ dependencies = [
 [[package]]
 name = "decode"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "ccp-protocol",
+ "sink",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "deranged"
@@ -1830,6 +1840,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "ccp-protocol",
+ "decode",
  "sink",
  "thiserror 1.0.69",
  "tokio",

@@ -16,6 +16,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use ccp_protocol::{ControlMessage, SetCamera};
+use decode::{Decoder, PassthroughDecoder};
 use mediapipeline::MediaPipeline;
 use rand::RngCore;
 use serde::Serialize;
@@ -172,9 +173,8 @@ fn spawn_accept_loop(
                                         sink_count = snapshot.len(),
                                         "media stream attached; starting MediaPipeline"
                                     );
-                                    let _pipeline = MediaPipeline::spawn(ms, snapshot);
-                                    // Pipeline owns its task; let it run for the lifetime of the
-                                    // socket. Phase 2 single-session — Phase 6 will manage it.
+                                    let decoder: Arc<dyn Decoder> = Arc::new(PassthroughDecoder);
+                                    let _pipeline = MediaPipeline::spawn(ms, snapshot, decoder);
                                 }
                             });
                             let cp = ControlPlane::new(events_tx.clone(), snapshot_tx.clone());

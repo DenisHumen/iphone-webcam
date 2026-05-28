@@ -5,6 +5,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "ClearCam decode — stub crate, see docs/02-architecture.md (filled in later phases)"
+description = "ClearCam decode — Decoder trait + passthrough/stub implementations"
 
 [dependencies]
+ccp-protocol = { path = "../ccp-protocol" }
+sink = { path = "../sink" }
+bytes = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

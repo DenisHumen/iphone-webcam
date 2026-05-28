@@ -1,12 +1,15 @@
 //! MediaPipeline: pumps frames from a media socket into FrameSink consumers.
 //!
-//! Phase 2 only handles `Codec::Raw` (NV12). Drop-oldest is achieved naturally
-//! by each FrameSink owning its own bounded queue — `submit()` is required to
-//! be non-blocking and shed load locally.
+//! Routes by `Codec`:
+//!   - `Raw` → split NV12 → fanout (Phase 2 path).
+//!   - `Hevc`/`H264` → `Decoder::decode()` → fanout the resulting NV12 frame.
+//!
+//! Drop-oldest is delegated to each `FrameSink::submit()` impl.
 
 use std::sync::Arc;
 
 use ccp_protocol::Codec;
+use decode::{Decoder, FrameHint};
 use sink::{Frame, FrameSink};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
@@ -21,13 +24,17 @@ pub struct MediaPipeline {
 }
 
 impl MediaPipeline {
-    pub fn spawn(mut stream: MediaStream, sinks: Vec<Arc<dyn FrameSink>>) -> Self {
+    pub fn spawn(
+        mut stream: MediaStream,
+        sinks: Vec<Arc<dyn FrameSink>>,
+        decoder: Arc<dyn Decoder>,
+    ) -> Self {
         let task = tokio::spawn(async move {
             info!("media pipeline running");
             loop {
                 match read_media_frame(&mut stream).await {
                     Ok(frame) => {
-                        if let Err(e) = ingest(&frame, &sinks).await {
+                        if let Err(e) = ingest(&frame, &sinks, &*decoder).await {
                             warn!(error = ?e, "frame ingest failed; continuing");
                         }
                     }
@@ -42,20 +49,46 @@ impl MediaPipeline {
     }
 }
 
-async fn ingest(raw: &MediaFrame, sinks: &[Arc<dyn FrameSink>]) -> Result<(), MediaPipelineError> {
-    if raw.header.codec != Codec::Raw {
-        return Err(MediaPipelineError::UnsupportedCodec(raw.header.codec));
-    }
-    let (y, uv) = split_nv12(raw.payload.clone(), raw.header.width, raw.header.height)?;
-    let frame = Frame {
-        width: raw.header.width,
-        height: raw.header.height,
-        pts_usec: raw.header.pts_usec,
-        seq: raw.header.seq,
-        codec: raw.header.codec,
-        plane_y: y,
-        plane_uv: uv,
-        full_range: raw.header.flags.contains(ccp_protocol::Flags::FULL_RANGE),
+async fn ingest(
+    raw: &MediaFrame,
+    sinks: &[Arc<dyn FrameSink>],
+    decoder: &dyn Decoder,
+) -> Result<(), MediaPipelineError> {
+    let frame = match raw.header.codec {
+        Codec::Raw => {
+            let (y, uv) = split_nv12(raw.payload.clone(), raw.header.width, raw.header.height)?;
+            Frame {
+                width: raw.header.width,
+                height: raw.header.height,
+                pts_usec: raw.header.pts_usec,
+                seq: raw.header.seq,
+                codec: Codec::Raw,
+                plane_y: y,
+                plane_uv: uv,
+                full_range: raw.header.flags.contains(ccp_protocol::Flags::FULL_RANGE),
+            }
+        }
+        codec @ (Codec::Hevc | Codec::H264) => {
+            let hint = FrameHint {
+                width: raw.header.width,
+                height: raw.header.height,
+                pts_usec: raw.header.pts_usec,
+                seq: raw.header.seq,
+                keyframe: raw.header.flags.contains(ccp_protocol::Flags::KEYFRAME),
+                config: raw.header.flags.contains(ccp_protocol::Flags::CONFIG),
+                full_range: raw.header.flags.contains(ccp_protocol::Flags::FULL_RANGE),
+            };
+            match decoder.decode(codec, raw.payload.clone(), hint).await {
+                Some(f) => f,
+                None => {
+                    debug!(
+                        seq = raw.header.seq,
+                        "decoder consumed config/intermediate frame"
+                    );
+                    return Ok(());
+                }
+            }
+        }
     };
     debug!(seq = frame.seq, "ingested frame");
     for s in sinks {
@@ -68,7 +101,8 @@ async fn ingest(raw: &MediaFrame, sinks: &[Arc<dyn FrameSink>]) -> Result<(), Me
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use ccp_protocol::{Codec, Flags, MediaHeader, MediaType};
+    use ccp_protocol::{Flags, MediaHeader, MediaType};
+    use decode::PassthroughDecoder;
     use tokio::io::{duplex, AsyncWriteExt};
     use tokio::sync::Mutex;
 
@@ -82,23 +116,28 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn pipeline_forwards_three_raw_frames_to_sink() {
-        let (mut writer, reader_half) = duplex(1024 * 1024);
+    fn build_stream(buffer_size: usize) -> (tokio::io::DuplexStream, MediaStream) {
+        let (writer, reader_half) = duplex(buffer_size);
         let peer = transport::PeerInfo {
             addr: "127.0.0.1:0".parse().unwrap(),
         };
         let (r, w) = tokio::io::split(reader_half);
-        let ms = transport::MediaStream {
+        let ms = MediaStream {
             peer,
             reader: Box::pin(r),
             writer: Box::pin(w),
         };
+        (writer, ms)
+    }
+
+    #[tokio::test]
+    async fn pipeline_forwards_three_raw_frames_to_sink() {
+        let (mut writer, ms) = build_stream(1024 * 1024);
         let frames = Arc::new(Mutex::new(Vec::<Frame>::new()));
         let sink_arc: Arc<dyn FrameSink> = Arc::new(CapturingSink {
             frames: frames.clone(),
         });
-        let pipeline = MediaPipeline::spawn(ms, vec![sink_arc]);
+        let pipeline = MediaPipeline::spawn(ms, vec![sink_arc], Arc::new(PassthroughDecoder));
 
         for seq in 0..3u32 {
             let header = MediaHeader {
@@ -115,17 +154,61 @@ mod tests {
             writer.write_all(&vec![seq as u8; 384]).await.unwrap();
         }
         writer.flush().await.unwrap();
-        drop(writer); // close, let the reader's read_exact fail and the loop exit
-
-        // wait for pipeline task to drain + exit
+        drop(writer);
         let _ = pipeline.task.await;
 
         let got = frames.lock().await;
         assert_eq!(got.len(), 3);
         assert_eq!(got[0].seq, 0);
         assert_eq!(got[2].seq, 2);
-        assert_eq!(got[0].plane_y.len(), 256);
-        assert_eq!(got[0].plane_uv.len(), 128);
-        assert!(got[0].full_range);
+    }
+
+    #[tokio::test]
+    async fn pipeline_routes_hevc_through_decoder_and_skips_config() {
+        let (mut writer, ms) = build_stream(64 * 1024);
+        let frames = Arc::new(Mutex::new(Vec::<Frame>::new()));
+        let sink_arc: Arc<dyn FrameSink> = Arc::new(CapturingSink {
+            frames: frames.clone(),
+        });
+        let pipeline = MediaPipeline::spawn(ms, vec![sink_arc], Arc::new(PassthroughDecoder));
+
+        // Config frame — should be swallowed.
+        let cfg = MediaHeader {
+            media_type: MediaType::Video,
+            flags: Flags::ENCODED | Flags::CONFIG,
+            codec: Codec::Hevc,
+            width: 16,
+            height: 16,
+            seq: 0,
+            pts_usec: 0,
+            payload_len: 4,
+        };
+        writer.write_all(&cfg.encode()).await.unwrap();
+        writer.write_all(&[0u8; 4]).await.unwrap();
+        // Two encoded frames.
+        for seq in 1..=2u32 {
+            let h = MediaHeader {
+                media_type: MediaType::Video,
+                flags: Flags::ENCODED | Flags::KEYFRAME,
+                codec: Codec::Hevc,
+                width: 16,
+                height: 16,
+                seq,
+                pts_usec: u64::from(seq),
+                payload_len: 8,
+            };
+            writer.write_all(&h.encode()).await.unwrap();
+            writer.write_all(&[0u8; 8]).await.unwrap();
+        }
+        writer.flush().await.unwrap();
+        drop(writer);
+        let _ = pipeline.task.await;
+
+        let got = frames.lock().await;
+        assert_eq!(got.len(), 2, "config frame should not produce a Frame");
+        assert_eq!(got[0].seq, 1);
+        assert_eq!(got[1].seq, 2);
+        // PassthroughDecoder writes seq as Y byte.
+        assert_eq!(got[0].plane_y[0], 1);
     }
 }

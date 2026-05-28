@@ -11,6 +11,7 @@ description = "ClearCam mediapipeline — async media-socket reader + NV12 norma
 ccp-protocol = { path = "../ccp-protocol" }
 transport = { path = "../transport" }
 sink = { path = "../sink" }
+decode = { path = "../decode" }
 tokio = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
