@@ -16,6 +16,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 use super::conductor::{BoxedReader, BoxedWriter, ConnectionType, UsbConductor, UsbDevice};
+use super::dial::{CCP_USB_CONTROL_PORT, CCP_USB_MEDIA_PORT};
 use super::error::UsbTransportError;
 
 /// Bound on how long `open_port` waits for the TCP connect to a registered
@@ -41,8 +42,10 @@ pub struct LoopbackConductor {
 }
 
 impl LoopbackConductor {
-    pub const DEFAULT_CONTROL_PORT: u16 = 7000;
-    pub const DEFAULT_MEDIA_PORT: u16 = 7001;
+    /// Re-exported from `super::dial` so callers see the canonical CCP USB
+    /// port numbers via a single source of truth.
+    pub const DEFAULT_CONTROL_PORT: u16 = CCP_USB_CONTROL_PORT;
+    pub const DEFAULT_MEDIA_PORT: u16 = CCP_USB_MEDIA_PORT;
 
     pub fn new() -> Self {
         Self {
