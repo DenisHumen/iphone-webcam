@@ -42,13 +42,19 @@ mod tests {
     #[test]
     fn usb_wins_against_wifi_for_same_udid() {
         let s = TransportSelector::new();
-        assert_eq!(s.decide_active("UDID-1", &[Candidate::wifi(), Candidate::usb()]), Some(Candidate::usb()));
+        assert_eq!(
+            s.decide_active("UDID-1", &[Candidate::wifi(), Candidate::usb()]),
+            Some(Candidate::usb())
+        );
     }
 
     #[test]
     fn lone_wifi_is_kept() {
         let s = TransportSelector::new();
-        assert_eq!(s.decide_active("UDID-1", &[Candidate::wifi()]), Some(Candidate::wifi()));
+        assert_eq!(
+            s.decide_active("UDID-1", &[Candidate::wifi()]),
+            Some(Candidate::wifi())
+        );
     }
 
     #[test]
