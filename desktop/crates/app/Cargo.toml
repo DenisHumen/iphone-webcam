@@ -23,6 +23,12 @@ serde_json = { workspace = true }
 qrcode = { workspace = true }
 rand = { workspace = true }
 async-trait = { workspace = true }
+directories = { workspace = true }
+toml = { workspace = true }
+base64 = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 bytes = { workspace = true }
+tempfile = "3"

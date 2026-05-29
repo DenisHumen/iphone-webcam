@@ -11,6 +11,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod pairing_store;
+pub use pairing_store::{PairingMaterial, PairingStore, PairingStoreError};
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
