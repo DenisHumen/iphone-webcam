@@ -14,6 +14,9 @@
 pub mod pairing_store;
 pub use pairing_store::{PairingMaterial, PairingStore, PairingStoreError};
 
+pub mod usb_supervisor;
+pub use usb_supervisor::{DialedStreams, UsbSupervisor};
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
