@@ -113,6 +113,19 @@
 - **Решение:** см. [01](01-vision-and-requirements.md) §6.2. **Обоснование:** доступность нужных API
   (CMIO, MFCreateVirtualCamera) при разумном охвате устройств.
 
+### ADR-022 ✅ USB Transport — pure-Rust `idevice` (locked-in choice from ADR-019)
+- **Решение:** использовать крейт `idevice` v0.1.61 (фичи `usbmuxd` + `ring`); конкретная функция
+  `idevice::usbmuxd::UsbmuxdConnection::connect_to_device(device_id: u32, port: u16, label: impl Into<String>) -> Result<Idevice, IdeviceError>`,
+  возвращающая `idevice::Idevice` — handle с внутренним `Box<dyn ReadWrite>`, извлекаемым через
+  `Idevice::get_socket() -> Option<Box<dyn ReadWrite>>`; `ReadWrite` — blanket trait над
+  `AsyncRead + AsyncWrite + Unpin + Send + Sync + Debug`.
+- **Обоснование:** ADR-019 предусматривал подтверждение в Фазе 5; крейт собирается из коробки на
+  macOS/Linux/Win, не требует C-зависимостей (выбран бэкенд `ring` вместо `aws-lc-rs`, чтобы
+  избежать C-билда), async/Tokio из коробки. Фича `usbmuxd` тянет `ring`-транзитивно через
+  `PairingFile`, поэтому crypto-backend обязателен.
+- **Последствия:** на Windows нужен Apple Mobile Device Support (входит в iTunes/драйверы Apple);
+  на Linux — пакет `usbmuxd` (см. `scripts/setup-linux-usbmuxd.sh`).
+
 ---
 
 ## Отложенные решения (за владельцем)

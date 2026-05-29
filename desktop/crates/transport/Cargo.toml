@@ -7,7 +7,12 @@ license.workspace = true
 publish = false
 description = "ClearCam transport — async TCP server/client + length-prefixed framing"
 
+[features]
+default = []
+usb-idevice = ["dep:idevice"]
+
 [dependencies]
+idevice = { workspace = true, optional = true }
 ccp-protocol = { path = "../ccp-protocol" }
 tokio = { workspace = true }
 bytes = { workspace = true }
