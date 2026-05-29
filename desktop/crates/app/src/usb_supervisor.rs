@@ -49,7 +49,7 @@ impl<C: UsbConductor + 'static> UsbSupervisor<C> {
             conductor,
             store,
             out,
-            label: "ClearCam/0.5".into(),
+            label: concat!("ClearCam/", env!("CARGO_PKG_VERSION")).into(),
         }
     }
 
@@ -68,7 +68,18 @@ impl<C: UsbConductor + 'static> UsbSupervisor<C> {
                         Ok((control, media)) => {
                             let key = match self.store.get(&dev.udid).await {
                                 Ok(Some(k)) => Some(k.as_b64()),
-                                _ => None,
+                                Ok(None) => None,
+                                Err(e) => {
+                                    // Corrupt pairing store — log so the cause
+                                    // is observable; falling through to None
+                                    // forces the trust ceremony to re-pair.
+                                    warn!(
+                                        udid = %dev.udid,
+                                        error = %e,
+                                        "pairing store read failed; treating as unpaired"
+                                    );
+                                    None
+                                }
                             };
                             if self
                                 .out
