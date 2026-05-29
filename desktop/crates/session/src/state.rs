@@ -3,16 +3,66 @@ use std::collections::HashMap;
 use ccp_protocol::{CameraEntry, DeviceInfo, Telemetry};
 use serde::{Deserialize, Serialize};
 
+/// Transport discriminator — Wi-Fi vs USB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportTag {
+    Wifi,
+    Usb,
+}
+
 /// Coarse-grained UI-facing state for one session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionStateKind {
     Idle,
-    Listening { control_port: u16, media_port: u16 },
-    Handshaking,
+    Listening {
+        control_port: u16,
+        media_port: u16,
+    },
+    /// Wi-Fi inbound handshake (server-accepted; serialized as `kind: "handshaking"`
+    /// for backward wire compat).
+    #[serde(rename = "handshaking")]
+    WifiHandshake,
+    /// USB outbound handshake; carries the device UDID we dialed.
+    #[serde(rename = "usb_handshake")]
+    UsbHandshake {
+        udid: String,
+    },
     Ready,
     Reconnecting,
-    Closed { reason: String },
+    Closed {
+        reason: String,
+    },
+}
+
+impl SessionStateKind {
+    pub fn wifi_handshake() -> Self {
+        Self::WifiHandshake
+    }
+
+    pub fn usb_handshake(udid: impl Into<String>) -> Self {
+        Self::UsbHandshake { udid: udid.into() }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Listening { .. } => "listening",
+            Self::WifiHandshake => "handshaking",
+            Self::UsbHandshake { .. } => "usb_handshake",
+            Self::Ready => "ready",
+            Self::Reconnecting => "reconnecting",
+            Self::Closed { .. } => "closed",
+        }
+    }
+
+    pub fn udid(&self) -> Option<&str> {
+        match self {
+            Self::UsbHandshake { udid } => Some(udid.as_str()),
+            _ => None,
+        }
+    }
 }
 
 /// Source-of-truth snapshot the UI mirrors.
@@ -102,5 +152,40 @@ mod tests {
         let s = serde_json::to_string(&snap).unwrap();
         let back: SessionSnapshot = serde_json::from_str(&s).unwrap();
         assert_eq!(back, snap);
+    }
+
+    #[test]
+    fn wifi_handshake_state_has_no_udid_and_correct_label() {
+        let s = SessionStateKind::wifi_handshake();
+        assert_eq!(s.label(), "handshaking");
+        assert!(s.udid().is_none());
+    }
+
+    #[test]
+    fn usb_handshake_state_carries_udid_and_correct_label() {
+        let s = SessionStateKind::usb_handshake("UDID-1");
+        assert_eq!(s.label(), "usb_handshake");
+        assert_eq!(s.udid(), Some("UDID-1"));
+    }
+
+    #[test]
+    fn wifi_handshake_serializes_with_legacy_handshaking_tag() {
+        let s = SessionStateKind::WifiHandshake;
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""kind":"handshaking""#));
+    }
+
+    #[test]
+    fn legacy_handshaking_tag_still_deserializes_to_wifi_handshake() {
+        let s: SessionStateKind = serde_json::from_str(r#"{"kind":"handshaking"}"#).unwrap();
+        assert_eq!(s, SessionStateKind::WifiHandshake);
+    }
+
+    #[test]
+    fn usb_handshake_serializes_with_udid_field() {
+        let s = SessionStateKind::usb_handshake("ABC");
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""kind":"usb_handshake""#));
+        assert!(json.contains(r#""udid":"ABC""#));
     }
 }

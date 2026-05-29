@@ -242,7 +242,7 @@ fn spawn_accept_loop(
                 None => return,
                 Some(WifiServerEvent::Control(mut cs)) => {
                     snapshot_tx.send_modify(|s| {
-                        s.state = SessionStateKind::Handshaking;
+                        s.state = SessionStateKind::WifiHandshake;
                     });
                     let token = expected_token.clone();
                     let caps = vec![
