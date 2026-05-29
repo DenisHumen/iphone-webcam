@@ -8,6 +8,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
@@ -30,8 +31,18 @@ pub enum PairingStoreError {
     NoConfigDir,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PairingMaterial(Vec<u8>);
+
+impl fmt::Debug for PairingMaterial {
+    /// Redacts the secret bytes so accidental `tracing::debug!(?material)` or
+    /// `dbg!(...)` calls cannot leak the pairing key to logs or stderr.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("PairingMaterial")
+            .field(&format_args!("<redacted {} bytes>", self.0.len()))
+            .finish()
+    }
+}
 
 impl PairingMaterial {
     pub fn new_random() -> Self {
@@ -112,21 +123,29 @@ impl PairingStore {
             },
         );
         let text = toml::to_string_pretty(&*g)?;
-        tokio::fs::write(&self.path, text).await?;
-        Ok(())
+        write_atomically(&self.path, text).await
     }
 
     pub async fn forget(&self, udid: &str) -> Result<(), PairingStoreError> {
         let mut g = self.data.write().await;
         g.pairings.remove(udid);
         let text = toml::to_string_pretty(&*g)?;
-        tokio::fs::write(&self.path, text).await?;
-        Ok(())
+        write_atomically(&self.path, text).await
     }
 
     pub async fn list(&self) -> Vec<String> {
         self.data.read().await.pairings.keys().cloned().collect()
     }
+}
+
+/// Crash-safe replacement: write to a sibling `.tmp` file, then rename onto
+/// the destination. POSIX `rename` is atomic so a crash mid-write leaves the
+/// previous good file in place rather than a truncated empty TOML.
+async fn write_atomically(path: &Path, contents: String) -> Result<(), PairingStoreError> {
+    let tmp = path.with_extension("toml.tmp");
+    tokio::fs::write(&tmp, contents).await?;
+    tokio::fs::rename(&tmp, path).await?;
+    Ok(())
 }
 
 #[cfg(test)]
