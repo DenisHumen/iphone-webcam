@@ -4,7 +4,7 @@
 #![cfg(feature = "usb-idevice")]
 
 use async_trait::async_trait;
-use idevice::usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdDevice};
+use idevice::usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection, UsbmuxdDevice};
 
 use super::conductor::{BoxedReader, BoxedWriter, ConnectionType, UsbConductor, UsbDevice};
 use super::error::UsbTransportError;
@@ -18,6 +18,16 @@ impl IdeviceConductor {
         let addr = UsbmuxdAddr::from_env_var().unwrap_or_else(|_| UsbmuxdAddr::default());
         Ok(Self { addr })
     }
+
+    /// Open a fresh usbmuxd Unix-socket connection. `idevice` consumes the
+    /// `UsbmuxdConnection` on every operation (e.g. `connect_to_device` takes
+    /// `self`), so we re-dial per-call rather than caching one.
+    async fn new_muxd(&self) -> Result<UsbmuxdConnection, UsbTransportError> {
+        self.addr
+            .connect(0)
+            .await
+            .map_err(|e| UsbTransportError::MuxdUnreachable(e.to_string()))
+    }
 }
 
 impl Default for IdeviceConductor {
@@ -29,11 +39,7 @@ impl Default for IdeviceConductor {
 #[async_trait]
 impl UsbConductor for IdeviceConductor {
     async fn list_devices(&self) -> Result<Vec<UsbDevice>, UsbTransportError> {
-        let mut muxd = self
-            .addr
-            .connect(0)
-            .await
-            .map_err(|e| UsbTransportError::MuxdUnreachable(e.to_string()))?;
+        let mut muxd = self.new_muxd().await?;
         let devs = muxd
             .get_devices()
             .await
@@ -47,14 +53,9 @@ impl UsbConductor for IdeviceConductor {
         port: u16,
         label: &str,
     ) -> Result<(BoxedReader, BoxedWriter), UsbTransportError> {
-        // `connect_to_device` consumes `muxd` (takes `self` by value), so we
-        // create a fresh connection per call — that is exactly what the helper
-        // in the original plan did via `new_muxd()`.
-        let muxd = self
-            .addr
-            .connect(0)
-            .await
-            .map_err(|e| UsbTransportError::MuxdUnreachable(e.to_string()))?;
+        // `connect_to_device` consumes `muxd` (takes `self` by value), hence
+        // a fresh muxd per call.
+        let muxd = self.new_muxd().await?;
 
         let idev = muxd
             .connect_to_device(device_id, port, label)
