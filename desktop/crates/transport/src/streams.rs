@@ -98,6 +98,18 @@ impl MediaStream {
             writer: Box::pin(w),
         }
     }
+
+    pub fn from_halves<R, W>(peer: PeerInfo, r: R, w: W) -> Self
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
+        Self {
+            peer,
+            reader: Box::pin(r),
+            writer: Box::pin(w),
+        }
+    }
 }
 
 #[cfg(test)]
