@@ -18,6 +18,12 @@ use tokio::sync::Mutex;
 use super::conductor::{BoxedReader, BoxedWriter, ConnectionType, UsbConductor, UsbDevice};
 use super::error::UsbTransportError;
 
+/// Bound on how long `open_port` waits for the TCP connect to a registered
+/// listener. Loopback connects are sub-millisecond in practice; the timeout
+/// guards against a misconfigured test where `control_addr` points at a
+/// listener that was never started.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+
 #[derive(Debug, Clone)]
 pub struct LoopbackDevice {
     pub id: u32,
@@ -26,7 +32,6 @@ pub struct LoopbackDevice {
     pub media_addr: SocketAddr,
 }
 
-#[derive(Default)]
 pub struct LoopbackConductor {
     devices: Arc<Mutex<Vec<LoopbackDevice>>>,
     /// CCP fixed ports (mirror docs/03 §2). Set on construction; tests can
@@ -46,7 +51,18 @@ impl LoopbackConductor {
             media_port: Self::DEFAULT_MEDIA_PORT,
         }
     }
+}
 
+impl Default for LoopbackConductor {
+    fn default() -> Self {
+        // Delegate to `new()` so `Default` produces a routable conductor
+        // (ports 7000/7001), not the inert 0/0 that `#[derive(Default)]`
+        // would yield.
+        Self::new()
+    }
+}
+
+impl LoopbackConductor {
     pub fn with_ports(mut self, control: u16, media: u16) -> Self {
         self.control_port = control;
         self.media_port = media;
@@ -112,7 +128,7 @@ impl UsbConductor for LoopbackConductor {
                 reason: "loopback conductor only routes the two CCP ports".into(),
             });
         };
-        let sock = tokio::time::timeout(Duration::from_secs(2), TcpStream::connect(target))
+        let sock = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(target))
             .await
             .map_err(|_| UsbTransportError::ConnectFailed {
                 port,
