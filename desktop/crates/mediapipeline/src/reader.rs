@@ -86,6 +86,7 @@ mod tests {
 
         let peer = transport::PeerInfo {
             addr: "127.0.0.1:0".parse().unwrap(),
+            source: transport::Source::Wifi,
         };
         let (r, w) = tokio::io::split(b);
         let mut ms = transport::MediaStream {
@@ -120,6 +121,7 @@ mod tests {
         let mut ms = transport::MediaStream {
             peer: transport::PeerInfo {
                 addr: "127.0.0.1:0".parse().unwrap(),
+                source: transport::Source::Wifi,
             },
             reader: Box::pin(r),
             writer: Box::pin(w),

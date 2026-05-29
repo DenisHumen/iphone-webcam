@@ -82,7 +82,7 @@ pub async fn write_media_hello(
 mod tests {
     use super::*;
     use tokio::net::{TcpListener, TcpStream};
-    use transport::PeerInfo;
+    use transport::{PeerInfo, Source};
 
     #[tokio::test]
     async fn round_trip_media_hello_over_tcp() {
@@ -90,13 +90,25 @@ mod tests {
         let addr = l.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (sock, peer) = l.accept().await.unwrap();
-            let mut ms = MediaStream::from_tcp(PeerInfo { addr: peer }, sock);
+            let mut ms = MediaStream::from_tcp(
+                PeerInfo {
+                    addr: peer,
+                    source: Source::Wifi,
+                },
+                sock,
+            );
             read_media_hello(&mut ms).await
         });
         let client = tokio::spawn(async move {
             let sock = TcpStream::connect(addr).await.unwrap();
             let peer = sock.peer_addr().unwrap();
-            let mut ms = MediaStream::from_tcp(PeerInfo { addr: peer }, sock);
+            let mut ms = MediaStream::from_tcp(
+                PeerInfo {
+                    addr: peer,
+                    source: Source::Wifi,
+                },
+                sock,
+            );
             write_media_hello(
                 &mut ms,
                 &MediaBinding {

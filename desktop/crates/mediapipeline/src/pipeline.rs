@@ -120,6 +120,7 @@ mod tests {
         let (writer, reader_half) = duplex(buffer_size);
         let peer = transport::PeerInfo {
             addr: "127.0.0.1:0".parse().unwrap(),
+            source: transport::Source::Wifi,
         };
         let (r, w) = tokio::io::split(reader_half);
         let ms = MediaStream {

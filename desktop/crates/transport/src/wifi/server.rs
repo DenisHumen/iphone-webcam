@@ -11,6 +11,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use crate::source::Source;
 use crate::streams::{ControlStream, MediaStream, PeerInfo};
 use crate::TransportError;
 
@@ -58,7 +59,13 @@ impl BoundPortsWithListeners {
                 match control.accept().await {
                     Ok((sock, addr)) => {
                         info!(?addr, "accepted control connection");
-                        let cs = ControlStream::from_tcp(PeerInfo { addr }, sock);
+                        let cs = ControlStream::from_tcp(
+                            PeerInfo {
+                                addr,
+                                source: Source::Wifi,
+                            },
+                            sock,
+                        );
                         if tx_ctl.send(WifiServerEvent::Control(cs)).await.is_err() {
                             return;
                         }
@@ -72,7 +79,13 @@ impl BoundPortsWithListeners {
                 match media.accept().await {
                     Ok((sock, addr)) => {
                         info!(?addr, "accepted media connection");
-                        let ms = MediaStream::from_tcp(PeerInfo { addr }, sock);
+                        let ms = MediaStream::from_tcp(
+                            PeerInfo {
+                                addr,
+                                source: Source::Wifi,
+                            },
+                            sock,
+                        );
                         if tx.send(WifiServerEvent::Media(ms)).await.is_err() {
                             return;
                         }

@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 
 use tokio::net::TcpStream;
 
+use crate::source::Source;
 use crate::streams::{ControlStream, MediaStream, PeerInfo};
 use crate::TransportError;
 
@@ -15,9 +16,11 @@ pub async fn connect(
     let media_sock = TcpStream::connect(media).await?;
     let control_peer = PeerInfo {
         addr: control_sock.peer_addr()?,
+        source: Source::Wifi,
     };
     let media_peer = PeerInfo {
         addr: media_sock.peer_addr()?,
+        source: Source::Wifi,
     };
     Ok((
         ControlStream::from_tcp(control_peer, control_sock),

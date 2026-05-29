@@ -13,6 +13,7 @@ use tokio::net::TcpStream;
 
 use crate::error::TransportError;
 use crate::framing::{read_frame, write_frame};
+use crate::source::Source;
 
 type BoxedReader = Pin<Box<dyn AsyncRead + Send + Unpin>>;
 type BoxedWriter = Pin<Box<dyn AsyncWrite + Send + Unpin>>;
@@ -20,6 +21,7 @@ type BoxedWriter = Pin<Box<dyn AsyncWrite + Send + Unpin>>;
 #[derive(Debug, Clone)]
 pub struct PeerInfo {
     pub addr: SocketAddr,
+    pub source: Source,
 }
 
 pub struct ControlStream {
@@ -107,6 +109,7 @@ mod tests {
     fn dummy_peer() -> PeerInfo {
         PeerInfo {
             addr: "127.0.0.1:0".parse().unwrap(),
+            source: Source::Wifi,
         }
     }
 
@@ -128,5 +131,27 @@ mod tests {
         left.send(&env).await.unwrap();
         let got = right.recv().await.unwrap();
         assert_eq!(got, env);
+    }
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+    use crate::source::Source;
+
+    #[test]
+    fn control_stream_carries_source_label() {
+        let cs = ControlStream::from_halves(
+            PeerInfo {
+                addr: "127.0.0.1:0".parse().unwrap(),
+                source: Source::Usb {
+                    udid: "ABCD-1234".into(),
+                },
+            },
+            tokio::io::empty(),
+            tokio::io::sink(),
+        );
+        assert!(matches!(cs.peer.source, Source::Usb { .. }));
+        assert_eq!(cs.peer.source.udid(), Some("ABCD-1234"));
     }
 }

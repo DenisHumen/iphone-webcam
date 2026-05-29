@@ -135,11 +135,12 @@ mod tests {
     use super::*;
     use ccp_protocol::DeviceIdent;
     use tokio::io::duplex;
-    use transport::PeerInfo;
+    use transport::{PeerInfo, Source};
 
     fn dummy_peer() -> PeerInfo {
         PeerInfo {
             addr: "127.0.0.1:0".parse().unwrap(),
+            source: Source::Wifi,
         }
     }
 
