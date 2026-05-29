@@ -29,10 +29,26 @@ pub struct HelloAck {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Auth {
-    /// Either a fresh QR token (Wi-Fi) or a stored pairing key (USB).
-    pub token: String,
+#[serde(untagged, rename_all = "camelCase")]
+pub enum Auth {
+    Token {
+        token: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    PairingKey {
+        pairing_key: String,
+    },
+}
+
+impl Auth {
+    pub fn token(t: impl Into<String>) -> Self {
+        Self::Token { token: t.into() }
+    }
+    pub fn pairing_key(k: impl Into<String>) -> Self {
+        Self::PairingKey {
+            pairing_key: k.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,5 +132,35 @@ mod tests {
     fn error_code_snake_case() {
         let s = serde_json::to_string(&ErrorCode::IncompatibleVersion).unwrap();
         assert_eq!(s, "\"incompatible_version\"");
+    }
+
+    #[test]
+    fn auth_json_with_token_decodes() {
+        let v: Auth = serde_json::from_str(r#"{"token":"abc"}"#).unwrap();
+        assert!(matches!(v, Auth::Token { ref token } if token == "abc"));
+    }
+
+    #[test]
+    fn auth_json_with_pairing_key_decodes() {
+        let v: Auth = serde_json::from_str(r#"{"pairingKey":"AA=="}"#).unwrap();
+        assert!(matches!(v, Auth::PairingKey { .. }));
+    }
+
+    #[test]
+    fn auth_token_round_trip_is_unchanged_on_the_wire() {
+        let original = Auth::Token {
+            token: "abc".into(),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        assert_eq!(json, r#"{"token":"abc"}"#);
+    }
+
+    #[test]
+    fn auth_pairing_key_round_trip() {
+        let original = Auth::PairingKey {
+            pairing_key: "AA==".into(),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        assert_eq!(json, r#"{"pairingKey":"AA=="}"#);
     }
 }

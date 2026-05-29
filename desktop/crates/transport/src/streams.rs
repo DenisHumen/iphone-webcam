@@ -136,9 +136,7 @@ mod tests {
         let env = ControlEnvelope {
             seq: 1,
             ack: None,
-            body: ControlMessage::Auth(Auth {
-                token: "abc".into(),
-            }),
+            body: ControlMessage::Auth(Auth::token("abc")),
         };
         left.send(&env).await.unwrap();
         let got = right.recv().await.unwrap();

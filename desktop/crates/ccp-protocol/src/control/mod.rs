@@ -207,7 +207,7 @@ mod tests {
                 proto_ver: 1,
                 caps: vec![],
             }),
-            ControlMessage::Auth(Auth { token: "t".into() }),
+            ControlMessage::Auth(Auth::token("t")),
             ControlMessage::AuthOk(AuthOk {
                 session_id: "s".into(),
             }),

@@ -47,7 +47,7 @@ async fn set_camera_command_lands_as_set_camera_envelope() {
         .send(&ControlEnvelope {
             seq: 2,
             ack: None,
-            body: ControlMessage::Auth(Auth { token }),
+            body: ControlMessage::Auth(Auth::token(token)),
         })
         .await
         .unwrap();

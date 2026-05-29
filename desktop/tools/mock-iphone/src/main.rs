@@ -117,9 +117,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
         .send(&ControlEnvelope {
             seq,
             ack: None,
-            body: ControlMessage::Auth(Auth {
-                token: args.token.clone(),
-            }),
+            body: ControlMessage::Auth(Auth::token(args.token.clone())),
         })
         .await?;
     let auth_ok = control.recv().await?;

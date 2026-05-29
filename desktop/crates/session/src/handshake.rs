@@ -89,7 +89,14 @@ pub async fn accept_control(
             return Err(SessionError::UnexpectedMessage("expected AUTH"));
         }
     };
-    if auth.token != expected_token {
+    let presented_token = match &auth {
+        Auth::Token { token } => token.as_str(),
+        Auth::PairingKey { .. } => {
+            send_error(stream, auth_env.seq, ErrorCode::Unauthorized, "bad token").await?;
+            return Err(SessionError::Unauthorized);
+        }
+    };
+    if presented_token != expected_token {
         send_error(stream, auth_env.seq, ErrorCode::Unauthorized, "bad token").await?;
         return Err(SessionError::Unauthorized);
     }
@@ -106,7 +113,7 @@ pub async fn accept_control(
     info!(%session_id, device.model = %hello.device.model, "control handshake complete");
     Ok(AcceptedSession {
         session_id,
-        token: auth.token,
+        token: presented_token.to_owned(),
         hello,
     })
 }
@@ -183,9 +190,7 @@ mod tests {
         cli.send(&ControlEnvelope {
             seq: 11,
             ack: None,
-            body: ControlMessage::Auth(Auth {
-                token: "secret".into(),
-            }),
+            body: ControlMessage::Auth(Auth::token("secret")),
         })
         .await
         .unwrap();
@@ -224,9 +229,7 @@ mod tests {
         cli.send(&ControlEnvelope {
             seq: 2,
             ack: None,
-            body: ControlMessage::Auth(Auth {
-                token: "WRONG".into(),
-            }),
+            body: ControlMessage::Auth(Auth::token("WRONG")),
         })
         .await
         .unwrap();

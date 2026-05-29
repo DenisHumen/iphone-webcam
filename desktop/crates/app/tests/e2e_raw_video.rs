@@ -73,9 +73,7 @@ async fn mock_iphone_streams_raw_frames_to_sink() {
         .send(&ControlEnvelope {
             seq: 2,
             ack: None,
-            body: ControlMessage::Auth(Auth {
-                token: token.clone(),
-            }),
+            body: ControlMessage::Auth(Auth::token(token.clone())),
         })
         .await
         .unwrap();
