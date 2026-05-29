@@ -247,6 +247,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_pairing_key_on_wifi() {
+        let (mut srv, mut cli) = make_pair();
+        let server = tokio::spawn(async move { accept_control(&mut srv, "secret", &[]).await });
+        cli.send(&ControlEnvelope {
+            seq: 1,
+            ack: None,
+            body: ControlMessage::Hello(Hello {
+                proto_ver: PROTO_VER,
+                app: "x".into(),
+                device: DeviceIdent {
+                    model: "x".into(),
+                    os_ver: "x".into(),
+                },
+                session_id: "x".into(),
+                caps: vec![],
+            }),
+        })
+        .await
+        .unwrap();
+        let _ack = cli.recv().await.unwrap();
+        cli.send(&ControlEnvelope {
+            seq: 2,
+            ack: None,
+            body: ControlMessage::Auth(Auth::pairing_key("base64keydata")),
+        })
+        .await
+        .unwrap();
+        let err = cli.recv().await.unwrap();
+        match err.body {
+            ControlMessage::Error(ErrorMsg { code, .. }) => {
+                assert!(matches!(code, ErrorCode::Unauthorized));
+            }
+            other => panic!("expected ERROR(Unauthorized), got {other:?}"),
+        }
+        assert!(matches!(
+            server.await.unwrap(),
+            Err(SessionError::Unauthorized)
+        ));
+    }
+
+    #[tokio::test]
     async fn rejects_proto_mismatch() {
         let (mut srv, mut cli) = make_pair();
         let server = tokio::spawn(async move { accept_control(&mut srv, "secret", &[]).await });

@@ -32,3 +32,4 @@ chrono = { workspace = true }
 [dev-dependencies]
 bytes = { workspace = true }
 tempfile = "3"
+tracing-subscriber = { workspace = true }

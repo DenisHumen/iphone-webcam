@@ -60,12 +60,54 @@ pub struct AppHandle {
     sinks: Arc<RwLock<Vec<Arc<dyn FrameSink>>>>,
     outbound: Arc<RwLock<Option<OutboundSender>>>,
     accept_task: JoinHandle<()>,
+    usb_supervisor_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl AppHandle {
     /// Abort the background accept loop. Sockets close when the task drops.
     pub fn shutdown(&self) {
         self.accept_task.abort();
+        // Also abort the USB supervisor consumer task if one was started.
+        // `try_lock` is safe to call from a sync context; it won't block.
+        if let Ok(mut g) = self.usb_supervisor_task.try_lock() {
+            if let Some(t) = g.take() {
+                t.abort();
+            }
+        }
+    }
+
+    /// Spawn a [`UsbSupervisor`] that dials iOS devices found by `conductor`
+    /// and logs the resulting [`DialedStreams`].  The full handshake is wired
+    /// in Task 15; this method provides the structural scaffolding.
+    ///
+    /// Calling this a second time aborts the previous supervisor + consumer.
+    pub async fn start_usb_supervisor<C: transport::usb::UsbConductor + 'static>(
+        &self,
+        conductor: Arc<C>,
+        store: Arc<crate::PairingStore>,
+        poll_interval: std::time::Duration,
+    ) {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::DialedStreams>(4);
+        let sup = crate::UsbSupervisor::new(conductor, store, tx);
+        let sup_handle = sup.spawn(poll_interval);
+
+        let consumer = tokio::spawn(async move {
+            while let Some(dialed) = rx.recv().await {
+                tracing::info!(
+                    udid = %dialed.udid,
+                    has_pairing_key = dialed.pairing_key_b64.is_some(),
+                    "usb supervisor delivered dialed streams (full handshake — Task 15)"
+                );
+                // TODO(phase5/task15): run USB-side handshake & attach to ControlPlane.
+                drop(dialed);
+            }
+            sup_handle.abort();
+        });
+
+        let mut g = self.usb_supervisor_task.lock().await;
+        if let Some(prev) = g.replace(consumer) {
+            prev.abort();
+        }
     }
 
     /// Register a `FrameSink` for the next session's MediaPipeline. Must be
@@ -221,6 +263,7 @@ impl AppCore {
             sinks,
             outbound,
             accept_task,
+            usb_supervisor_task: Mutex::new(None),
         })
     }
 }
