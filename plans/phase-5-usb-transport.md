@@ -3063,10 +3063,177 @@ git commit -m "docs(plans): Phase 5 acceptance log + Phase 6 deferred items"
 
 ---
 
-## Retrospective (fill in during Task 25)
+## Acceptance log
 
-Write a short retrospective at the bottom of this file under `## Retrospective`, mirroring Phase 4's style. Cover:
+### 2026-05-30 — Phase 5 USB transport
 
-1. **What landed** — bullet list, one line per crate.
-2. **Deviations from the plan** — anything we adjusted while writing it.
-3. **Open questions** — what to verify on a real iPhone first time Phase 5 runs against hardware.
+**Rust desktop (`transport` + `app` + `ccp-protocol` + `session`)** — 18 новых
+коммитов, 107 рабочих тестов в workspace.
+
+- **`transport::usb`** — `UsbConductor` trait, `LoopbackConductor` (CI-friendly,
+  атомарная `Default` делегирует в `new()`, `CONNECT_TIMEOUT` const),
+  `IdeviceConductor` (фича `usb-idevice`, idevice 0.1.61 + `ring`), `open_pair`
+  с `Source::Usb { udid }`. ADR-022 зафиксирован.
+- **`transport::Source`** — enum на `PeerInfo` для разметки Wi-Fi/USB. `Hash`
+  derive добавлен на старте под будущие `HashMap<Source,…>`.
+- **`ccp-protocol::Auth`** — refactored в `#[serde(untagged)]` enum
+  `Token { token }` / `PairingKey { pairing_key }` без bump'а `protoVer`.
+- **`session::SessionStateKind`** — добавлены `WifiHandshake` (с `#[serde(rename
+  = "handshaking")]` для обратной совместимости) и `UsbHandshake { udid }`,
+  `TransportTag` enum.
+- **`session::handshake`** — Wi-Fi путь отвергает `Auth::PairingKey` с
+  `ErrorCode::Unauthorized`; regression-тест `rejects_pairing_key_on_wifi`.
+- **`app::PairingStore`** — TOML под `<config>/clearcam/pairings.toml`, atomic
+  write через tmp+rename, `Debug` редактирован чтобы не лить секрет в логи.
+- **`app::UsbSupervisor`** — `DeviceWatcher` loop, `open_pair`, lookup в
+  PairingStore, выдаёт `DialedStreams`. `label` берётся из
+  `CARGO_PKG_VERSION`. Ошибки чтения PairingStore логируются `warn!`.
+- **`app::TransportSelector`** — кабель выигрывает у Wi-Fi (ADR-004/010).
+- **`AppHandle::start_usb_supervisor`** — добавлено; consumer-task логирует
+  `DialedStreams` (полная USB-session интеграция отложена в Phase 6).
+- **e2e** — `desktop/crates/app/tests/usb_e2e.rs` живой: спавнит
+  `mock-iphone --transport usb` в listener-режиме, гоняет `LoopbackConductor` +
+  `UsbSupervisor` и асертит `Source::Usb`.
+- **`tools/mock-iphone`** — расщеплено на `lib + thin main`, добавлен
+  `--transport usb` (NWListener-эквивалент через `TcpListener`).
+
+**Tauri + UI** — 107 → 107 Rust тестов, `pnpm typecheck/build` ✓.
+
+- Tauri-команды: `list_usb_devices`, `trust_usb_device`, `forget_usb_device`
+  (stubs — реальная подстановка из `AppCore` отложена в Phase 6).
+- События: `session://transport_changed`, `session://usb_trust_request`
+  (помечены `#[allow(dead_code)]` — эмиттеры в Phase 6).
+- React-компоненты: `TransportBadge` (pill Wi-Fi/USB), `UsbDevicesList`
+  (poll + Trust/Forget), `TrustDialog` (модалка с подтверждением).
+
+**iOS (`ClearCamCore`)** — 51 тест в Swift, все зелёные.
+
+- `Transport/TransportRole.swift` — enum `.client(host,cport,mport) |
+  .listener(cport,mport)`.
+- `Transport/TransportListener.swift` — actor с `NWListener`-парой;
+  пейринг-логика покрыта 4 тестами через приватный `_inject` (реальный
+  `NWListener` accept под `swift test` не работает из-за macOS-sandbox,
+  валидируется на устройстве в Phase 6).
+- `Pairing/PairingKey.swift` — `Sendable` struct с `random()` (через
+  `SecRandomCopyBytes`) и `base64NoPad`.
+- `Pairing/PairingStore.swift` — actor с двумя провайдерами: `.keychain(service)`
+  (продакшен, использует `Security`-API) и `.inMemory` (тесты). 5 тестов.
+- `Pairing/TrustController.swift` — `@MainActor ObservableObject` с
+  `pendingPrompt: TrustPrompt?`, `requestTrust(forDesktopId:)` async,
+  `respond(accept:)` синхронным. 3 теста.
+- `Session/SessionController.swift` + `Session/UsbSessionDriver.swift` —
+  добавлен `AuthCredential` enum `{.token | .pairingKey}`, перегрузка
+  `connect(credential:)`, и драйвер актор, который пробрасывает
+  `PairingStore` lookup → `TrustController` trust-prompt → `connect`. 3 теста.
+
+**Scripts + docs**
+
+- `scripts/setup-linux-usbmuxd.sh`, `scripts/dev-usb.sh` — обновили DX.
+- `docs/03-protocol.md` — добавлены JSON-примеры `AUTH` (token vs
+  pairingKey).
+- `docs/05-desktop-app.md` — секция «USB transport» с описанием
+  `UsbConductor`, `open_pair`, `UsbSupervisor`, `TransportSelector`,
+  `PairingStore`.
+- `README.md` — матрица USB-prerequisites (macOS / Linux / Windows).
+- `docs/12-decisions-log.md` — ADR-022 заполнен в Task 1.
+
+### Gates
+
+- `cargo fmt --check` ✓
+- `cargo clippy --workspace --all-targets -- -D warnings` ✓
+- `cargo test --workspace` ✓ (107 passed, 0 failed)
+- `cargo build -p transport --features usb-idevice` ✓
+- `pnpm -C desktop/ui typecheck` ✓
+- `pnpm -C desktop/ui build` ✓ (155 kB JS, 45 modules)
+- `DEVELOPER_DIR=Xcode swift test` ✓ (51 passed, 0 failed)
+
+### Deferred to Phase 6 polish
+
+1. **Полная USB-handshake интеграция в `AppCore`.** Сейчас
+   `start_usb_supervisor` логирует `DialedStreams`. В Phase 6 потребитель
+   запускает session-loop, аналогичный Wi-Fi-пути, и заведёт сессию в
+   `ControlPlane`.
+2. **iOS-сторона `ClearCamProtocol.Auth`** пока единый формат `{token}`.
+   Десктоп уже поддерживает оба (`{token}` и `{pairingKey}`) через untagged
+   serde enum. Расщепление Swift `Auth` — Phase 6, как только USB-handshake
+   запустится на десктопе.
+3. **Реальный `NWListener` accept-тест на iOS** — требует устройство или
+   снятие sandbox-ограничения; в Phase 6 проверяется на железе.
+4. **Mid-stream Wi-Fi↔USB switchover** без разрыва (сейчас supervisor просто
+   логирует Lost-события; пере-аттач — Phase 6).
+5. **Tauri-команды `list_usb_devices` / `trust_usb_device` / `forget_usb_device`**
+   подключить к живому `PairingStore` и `UsbSupervisor` (сейчас stubs).
+6. **Эмиттеры событий `session://transport_changed` /
+   `session://usb_trust_request`** — точки эмиссии в `AppCore` появятся
+   вместе с full USB-handshake.
+7. **`UsbConductor::subscribe`** Override для `IdeviceConductor` —
+   `idevice::usbmuxd::UsbmuxdConnection::listen_for_devices` (или
+   эквивалент) даст событийный поток вместо polling. Default-polling-impl
+   достаточен для Phase 5.
+8. **`CLEARCAM_USB_LOOPBACK` env→`LoopbackConductor`** в `AppCore::start`
+   (script `dev-usb.sh` уже выставляет переменные; чтение в Rust —
+   Phase 6).
+
+## Retrospective
+
+### What landed
+
+- Пара conductor-ов (`Loopback`, `Idevice`) под единым trait
+  `UsbConductor`, что даёт нам CI без железа и production-путь.
+- Полная schema-совместимая трансформация `Auth` без bump'а `protoVer`.
+- Отдельный `PairingStore` с криптослучайным 32-байтным ключом, atomic
+  write, и редактированный `Debug` (секрет не утекает в логи).
+- iOS-side `NWListener` + `Keychain`-backed `PairingStore` + `TrustController`
+  как чистая state-machine для UI-prompt.
+- e2e тест на десктопе, гоняющий `LoopbackConductor` + mock-iphone
+  listener — это будет ключевая страховка при подключении к настоящему
+  iPhone.
+- Tauri + React surface для отображения и подтверждения USB-устройств.
+
+### Deviations from the plan
+
+1. **idevice 0.1.61 vs 0.2.** План указал 0.2; реально текущий релиз 0.1.61.
+   Подтверждено в ADR-022. Также фичи crate'а — `usbmuxd` + `ring` (не
+   `tokio`, который у крейта — direct dep, не feature).
+2. **`Idevice.get_socket()` extraction.** План предполагал, что
+   `connect_to_device` возвращает прямой stream; на деле возвращает
+   `Idevice` handle, и сокет надо извлекать. Поправлено в backend'е.
+3. **`SessionStateKind` форма.** План предполагал перестроить enum с нуля;
+   на деле существующий enum (`Idle/Listening/Handshaking/Ready/...`)
+   уже сериализуется в UI. Добавили варианты `WifiHandshake` и
+   `UsbHandshake { udid }` поверх, с
+   `#[serde(rename = "handshaking")]` для backward-compat.
+4. **Pairing-test test deviation.** Plan ожидал реальные `NWConnection`
+   клиенты на тест-стороне; macOS sandbox блокирует это для `swift test`.
+   Заменили на `_inject` hook, проверяющий пейринг-логику без сети.
+5. **`UsbSupervisor` без `?Sized`.** Plan указал `C: UsbConductor + ?Sized`,
+   но `UsbConductor::subscribe` имеет `where Self: Sized`. Решили: убрать
+   `?Sized` (concrete-conductor only). Для Phase 5 это нормально —
+   полиморфизм в `AppCore` пока не нужен.
+6. **`start_usb_supervisor` deferred handshake.** Plan ожидал полную
+   USB-сессию через supervisor; на деле для этого нужно повторить логику
+   Wi-Fi-handshake'а — отложено в Phase 6. Сейчас supervisor просто
+   логирует `DialedStreams`.
+7. **`Auth.token` дублирование на iOS.** Перенос `Auth` enum на iOS-сторону
+   отложен в Phase 6 — Swift `AuthCredential.pairingKey` сейчас пакуется в
+   `Auth(token:)` (на проводе `{"token":"<b64>"}`). Десктоп untagged-enum
+   расшифрует как `Token { token }` и Wi-Fi-путь отбросит — но это
+   неважно пока USB-handshake-сессия не активна на десктопе.
+
+### Open questions / verify on real iPhone in Phase 6
+
+- `idevice::UsbmuxdConnection::connect_to_device` против реального
+  `NWListener` внутри устройства: пройдёт ли connection? Apple iOS
+  usbmuxd-протокол поддерживает forward к произвольному порту в device, но
+  это надо проверить на 7000/7001 c iOS-приложением, поднявшим listener.
+- macOS Apple Mobile Device launchd-сервис должен быть запущен — обычно
+  по умолчанию, но скрипт-helper для Linux написан, а для macOS не
+  потребовался.
+- `iproxy`-эквивалент API в `idevice` 0.1.61 (нет explicit `iproxy` метода
+  — `connect_to_device` это и есть аналог). Контракт API возможно
+  слегка поменяется в 0.2.x — следить за миграциями.
+- iOS Keychain access из background при использовании `PairingStore`:
+  ключ доступен после первой разблокировки устройства? Phase 6 проверит.
+- Pairing-trust-prompt iOS workflow: достаточно ли `@MainActor` для UI
+  обвязки, или нужно `@Observable` (iOS 17+) для лучшей интеграции с
+  SwiftUI?
