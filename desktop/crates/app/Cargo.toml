@@ -31,5 +31,6 @@ chrono = { workspace = true }
 
 [dev-dependencies]
 bytes = { workspace = true }
+mock-iphone = { path = "../../tools/mock-iphone", package = "mock-iphone" }
 tempfile = "3"
 tracing-subscriber = { workspace = true }
