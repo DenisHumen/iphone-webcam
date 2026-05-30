@@ -80,7 +80,8 @@ impl ControlPlane {
         control: ControlStream,
     ) -> Result<(), SessionError> {
         let (_out_tx, out_rx) = mpsc::channel::<ControlMessage>(16);
-        self.run_with_outbound(accepted, control, out_rx).await
+        self.run_with_outbound(accepted, control, out_rx, None)
+            .await
     }
 
     pub async fn run_with_outbound(
@@ -88,6 +89,7 @@ impl ControlPlane {
         accepted: AcceptedSession,
         mut control: ControlStream,
         mut outbound: OutboundReceiver,
+        telemetry_tx: Option<mpsc::Sender<Telemetry>>,
     ) -> Result<(), SessionError> {
         info!(session_id = %accepted.session_id, "control plane running");
         self.broadcast(
@@ -173,7 +175,10 @@ impl ControlPlane {
                             let mut snap = self.snapshot_tx.borrow().clone();
                             snap.last_telemetry = Some(t.clone());
                             let _ = self.snapshot_tx.send(snap);
-                            let _ = self.events_tx.send(ControlPlaneEvent::Telemetry(t)).await;
+                            let _ = self.events_tx.send(ControlPlaneEvent::Telemetry(t.clone())).await;
+                            if let Some(tt) = &telemetry_tx {
+                                let _ = tt.try_send(t);
+                            }
                         }
                         ControlMessage::Bye(b) => {
                             info!(reason = %b.reason, "peer said BYE");
@@ -222,7 +227,7 @@ mod tests {
     use super::*;
     use ccp_protocol::{
         BatteryState, Bye, Capability, ControlEnvelope, ControlMessage, DeviceIdent, DeviceInfo,
-        Hello, ThermalState, PROTO_VER,
+        Hello, Telemetry, ThermalState, PROTO_VER,
     };
     use tokio::io::duplex;
     use transport::{PeerInfo, Source};
@@ -286,6 +291,88 @@ mod tests {
             }
         }
         assert!(snap_rx.borrow().device.is_some());
+
+        cli.send(&ControlEnvelope {
+            seq: 2,
+            ack: None,
+            body: ControlMessage::Bye(Bye {
+                reason: "done".into(),
+            }),
+        })
+        .await
+        .unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn telemetry_is_forked_to_optional_channel() {
+        let (a, b) = duplex(64 * 1024);
+        let (ra, wa) = tokio::io::split(a);
+        let (rb, wb) = tokio::io::split(b);
+        let srv = ControlStream::from_halves(peer(), ra, wa);
+        let mut cli = ControlStream::from_halves(peer(), rb, wb);
+
+        let (cp, mut events_rx, _snap_rx) =
+            ControlPlane::with_owned_channels(16, TransportTag::Wifi);
+        let accepted = AcceptedSession {
+            session_id: "sess-fork".into(),
+            token: "t".into(),
+            hello: Hello {
+                proto_ver: PROTO_VER,
+                app: "x".into(),
+                device: DeviceIdent {
+                    model: "m".into(),
+                    os_ver: "v".into(),
+                },
+                session_id: "x".into(),
+                caps: vec![Capability::Hevc],
+            },
+        };
+
+        let (telemetry_tx, mut telemetry_rx) = mpsc::channel::<Telemetry>(8);
+        let (_out_tx, out_rx) = mpsc::channel::<ControlMessage>(16);
+
+        let handle = tokio::spawn(async move {
+            let _ = cp
+                .run_with_outbound(accepted, srv, out_rx, Some(telemetry_tx))
+                .await;
+        });
+
+        let sample = Telemetry {
+            ts_usec: 42_000_000,
+            battery_level: 0.8,
+            battery_state: BatteryState::Charging,
+            thermal_state: ThermalState::Nominal,
+            sent_bitrate_kbps: 20_000,
+            enc_fps: 30,
+            capture_fps: 30,
+            queue_depth: 0,
+            drop_count: 0,
+        };
+
+        cli.send(&ControlEnvelope {
+            seq: 1,
+            ack: None,
+            body: ControlMessage::Telemetry(sample.clone()),
+        })
+        .await
+        .unwrap();
+
+        // Assert it arrives on the dedicated telemetry_rx channel.
+        let received = telemetry_rx.recv().await.unwrap();
+        assert_eq!(received.ts_usec, sample.ts_usec);
+        assert_eq!(received.sent_bitrate_kbps, sample.sent_bitrate_kbps);
+
+        // Assert it also arrives on events_rx as ControlPlaneEvent::Telemetry.
+        loop {
+            match events_rx.recv().await.unwrap() {
+                ControlPlaneEvent::Telemetry(t) => {
+                    assert_eq!(t.ts_usec, sample.ts_usec);
+                    break;
+                }
+                _ => continue,
+            }
+        }
 
         cli.send(&ControlEnvelope {
             seq: 2,

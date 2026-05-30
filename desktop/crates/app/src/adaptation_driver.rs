@@ -5,7 +5,7 @@
 use std::time::Instant;
 
 use adaptive::{Action, AdaptationState};
-use ccp_protocol::{CodecName, ControlMessage, FormatKind, Mode, PixelFormat, SetMode, Telemetry};
+use ccp_protocol::{ControlMessage, Mode, SetMode, Telemetry};
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -31,7 +31,7 @@ impl AdaptationDriver {
             .checked_sub(std::time::Duration::from_secs(10))
             .unwrap_or_else(Instant::now);
         Self {
-            state: AdaptationState::new_at(default_streaming_mode(), backdated),
+            state: AdaptationState::new_at(Mode::default_streaming_1080p30(), backdated),
             outbound,
         }
     }
@@ -51,19 +51,5 @@ impl AdaptationDriver {
                     .await;
             }
         }
-    }
-}
-
-#[cfg(any(test, feature = "test-util"))]
-fn default_streaming_mode() -> Mode {
-    Mode {
-        format: FormatKind::Encoded,
-        codec: CodecName::Hevc,
-        width: 1920,
-        height: 1080,
-        fps: 30,
-        bitrate_kbps: 30_000,
-        pixel_format: PixelFormat::Nv12,
-        full_range: true,
     }
 }

@@ -60,6 +60,23 @@ pub struct ModeApplied {
     pub at_seq: u32,
 }
 
+impl Mode {
+    /// Default streaming mode used as the adaptation starting point:
+    /// encoded HEVC 1080p30 @ 30 Mbps, NV12, full-range.
+    pub fn default_streaming_1080p30() -> Self {
+        Self {
+            format: FormatKind::Encoded,
+            codec: CodecName::Hevc,
+            width: 1920,
+            height: 1080,
+            fps: 30,
+            bitrate_kbps: 30_000,
+            pixel_format: PixelFormat::Nv12,
+            full_range: true,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,6 +92,13 @@ mod tests {
             pixel_format: PixelFormat::Nv12,
             full_range: true,
         }
+    }
+
+    #[test]
+    fn default_streaming_mode_is_hevc_1080p30() {
+        let m = Mode::default_streaming_1080p30();
+        assert_eq!((m.width, m.height, m.fps), (1920, 1080, 30));
+        assert_eq!(m.codec, CodecName::Hevc);
     }
 
     #[test]

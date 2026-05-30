@@ -144,6 +144,20 @@ impl AppHandle {
                             );
                             let (out_tx, out_rx) =
                                 mpsc::channel::<ccp_protocol::ControlMessage>(16);
+                            let (telemetry_tx, mut telemetry_rx) =
+                                mpsc::channel::<ccp_protocol::Telemetry>(16);
+                            {
+                                let driver_outbound = out_tx.clone();
+                                tokio::spawn(async move {
+                                    let mut driver = crate::AdaptationDriver::new(
+                                        driver_outbound,
+                                        ccp_protocol::Mode::default_streaming_1080p30(),
+                                    );
+                                    while let Some(t) = telemetry_rx.recv().await {
+                                        driver.observe(&t, 0.0).await;
+                                    }
+                                });
+                            }
                             *outbound.write().await = Some(out_tx);
                             let outbound_slot = outbound.clone();
 
@@ -155,8 +169,14 @@ impl AppHandle {
                                 MediaPipeline::spawn(dialed.media, snapshot_sinks, decoder);
 
                             tokio::spawn(async move {
-                                if let Err(e) =
-                                    cp.run_with_outbound(acc, dialed.control, out_rx).await
+                                if let Err(e) = cp
+                                    .run_with_outbound(
+                                        acc,
+                                        dialed.control,
+                                        out_rx,
+                                        Some(telemetry_tx),
+                                    )
+                                    .await
                                 {
                                     tracing::warn!(error = ?e, "usb control plane exited");
                                 }
@@ -422,10 +442,27 @@ fn spawn_accept_loop(
                                 session::TransportTag::Wifi,
                             );
                             let (out_tx, out_rx) = mpsc::channel::<ControlMessage>(16);
+                            let (telemetry_tx, mut telemetry_rx) =
+                                mpsc::channel::<ccp_protocol::Telemetry>(16);
+                            {
+                                let driver_outbound = out_tx.clone();
+                                tokio::spawn(async move {
+                                    let mut driver = crate::AdaptationDriver::new(
+                                        driver_outbound,
+                                        ccp_protocol::Mode::default_streaming_1080p30(),
+                                    );
+                                    while let Some(t) = telemetry_rx.recv().await {
+                                        driver.observe(&t, 0.0).await;
+                                    }
+                                });
+                            }
                             *outbound_slot.write().await = Some(out_tx);
                             let outbound_slot_for_session = outbound_slot.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = cp.run_with_outbound(acc, cs, out_rx).await {
+                                if let Err(e) = cp
+                                    .run_with_outbound(acc, cs, out_rx, Some(telemetry_tx))
+                                    .await
+                                {
                                     warn!(error = ?e, "control plane exited");
                                 }
                                 // Clear the outbound slot so set_camera returns "no active session"
