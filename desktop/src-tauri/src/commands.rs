@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use app::{AppCore, AppHandle};
+use app::{AppCore, AppHandle, PairingMaterial, PairingStore};
 use serde::Serialize;
 use session::SessionSnapshot;
 use tauri::{AppHandle as TauriAppHandle, State};
 use tokio::sync::Mutex;
+use transport::usb::UsbConductor;
 
 use crate::preview::PreviewSink;
 
@@ -100,22 +101,55 @@ pub struct UsbDeviceDto {
     pub trusted: bool,
 }
 
-#[tauri::command]
-pub async fn list_usb_devices() -> Result<Vec<UsbDeviceDto>, String> {
-    // Phase 5: returns an empty list until the supervisor is permanently
-    // wired into AppCore::start (deferred to Phase 6 polish).
-    Ok(Vec::new())
+#[derive(Clone)]
+pub struct UsbState {
+    pub conductor: Arc<dyn UsbConductor + Send + Sync>,
+    pub pairing: Arc<PairingStore>,
 }
 
 #[tauri::command]
-pub async fn trust_usb_device(udid: String) -> Result<(), String> {
-    let _ = udid; // accepted; the supervisor will pick up the key on next dial
+pub async fn list_usb_devices(state: State<'_, UsbState>) -> Result<Vec<UsbDeviceDto>, String> {
+    let devices = state
+        .conductor
+        .list_devices()
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(devices.len());
+    for d in devices {
+        let trusted = state
+            .pairing
+            .get(&d.udid)
+            .await
+            .map_err(|e| e.to_string())?
+            .is_some();
+        out.push(UsbDeviceDto {
+            id: d.id,
+            udid: d.udid,
+            product_id: d.product_id,
+            trusted,
+        });
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn trust_usb_device(udid: String, state: State<'_, UsbState>) -> Result<(), String> {
+    let key = PairingMaterial::new_random();
+    state
+        .pairing
+        .put(&udid, key)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn forget_usb_device(udid: String) -> Result<(), String> {
-    let _ = udid;
+pub async fn forget_usb_device(udid: String, state: State<'_, UsbState>) -> Result<(), String> {
+    state
+        .pairing
+        .forget(&udid)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
