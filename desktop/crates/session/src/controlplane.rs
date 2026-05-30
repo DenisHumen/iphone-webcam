@@ -27,6 +27,11 @@ pub enum ControlPlaneEvent {
     DeviceInfo(DeviceSnapshot),
     Telemetry(Telemetry),
     Closed(String),
+    /// Emitted when a USB device connects but has no stored pairing key.
+    /// The UI should prompt the user to trust/pair the device.
+    UsbTrustRequest {
+        udid: String,
+    },
 }
 
 pub struct ControlPlane {

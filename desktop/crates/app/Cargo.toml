@@ -29,8 +29,14 @@ base64 = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 
+[features]
+test-util = []
+
 [dev-dependencies]
 bytes = { workspace = true }
 mock-iphone = { path = "../../tools/mock-iphone", package = "mock-iphone" }
 tempfile = "3"
 tracing-subscriber = { workspace = true }
+# Enable test-util feature for the crate itself so integration tests can use
+# AppHandle::for_tests_with_pairing without pulling in a circular dependency.
+app = { path = ".", features = ["test-util"] }

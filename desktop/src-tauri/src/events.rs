@@ -43,6 +43,11 @@ pub async fn pump(app: tauri::AppHandle, state: super::commands::AppState) {
                         warn!(error = ?e, "emit session://closed failed");
                     }
                 }
+                ControlPlaneEvent::UsbTrustRequest { udid } => {
+                    if let Err(e) = app.emit(USB_TRUST_REQUEST, &udid) {
+                        warn!(error = ?e, "emit session://usb_trust_request failed");
+                    }
+                }
             },
         }
     }

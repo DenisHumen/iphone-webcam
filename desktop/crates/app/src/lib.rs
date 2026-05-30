@@ -61,6 +61,9 @@ pub struct AppHandle {
     outbound: Arc<RwLock<Option<OutboundSender>>>,
     accept_task: JoinHandle<()>,
     usb_supervisor_task: Mutex<Option<JoinHandle<()>>>,
+    /// Held so USB consumer (and future tasks) can fan out updates.
+    snapshot_tx: watch::Sender<SessionSnapshot>,
+    events_tx: mpsc::Sender<ControlPlaneEvent>,
 }
 
 impl AppHandle {
@@ -76,9 +79,9 @@ impl AppHandle {
         }
     }
 
-    /// Spawn a [`UsbSupervisor`] that dials iOS devices found by `conductor`
-    /// and logs the resulting [`DialedStreams`].  The full handshake is wired
-    /// in Task 15; this method provides the structural scaffolding.
+    /// Spawn a [`UsbSupervisor`] that dials iOS devices found by `conductor`,
+    /// runs the USB handshake, and attaches to [`ControlPlane`] + [`MediaPipeline`].
+    /// Devices with no stored pairing key emit [`session::ControlPlaneEvent::UsbTrustRequest`].
     ///
     /// Calling this a second time aborts the previous supervisor + consumer.
     pub async fn start_usb_supervisor<C: transport::usb::UsbConductor + 'static>(
@@ -88,21 +91,82 @@ impl AppHandle {
         poll_interval: std::time::Duration,
     ) {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<crate::DialedStreams>(4);
-        let sup = crate::UsbSupervisor::new(conductor, store, tx);
+        let sup = crate::UsbSupervisor::new(conductor, store.clone(), tx);
         let sup_handle = sup.spawn(poll_interval);
 
-        let consumer = tokio::spawn(async move {
-            while let Some(dialed) = rx.recv().await {
-                tracing::info!(
-                    udid = %dialed.udid,
-                    has_pairing_key = dialed.pairing_key_b64.is_some(),
-                    "usb supervisor delivered dialed streams (full handshake — Task 15)"
-                );
-                // TODO(phase5/task15): run USB-side handshake & attach to ControlPlane.
-                drop(dialed);
-            }
-            sup_handle.abort();
-        });
+        let consumer = {
+            let snapshot_tx = self.snapshot_tx.clone();
+            let events_tx = self.events_tx.clone();
+            let sinks = self.sinks.clone();
+            let outbound = self.outbound.clone();
+            let pairing = store.clone();
+            tokio::spawn(async move {
+                while let Some(mut dialed) = rx.recv().await {
+                    tracing::info!(udid = %dialed.udid, "usb session: starting handshake");
+                    snapshot_tx.send_modify(|s| {
+                        s.state = SessionStateKind::usb_handshake(dialed.udid.clone());
+                    });
+
+                    // Resolve pairing key. Missing → emit UsbTrustRequest, skip session.
+                    let key_b64 = match pairing.get(&dialed.udid).await {
+                        Ok(Some(k)) => k.as_b64(),
+                        Ok(None) => {
+                            let _ = events_tx
+                                .send(session::ControlPlaneEvent::UsbTrustRequest {
+                                    udid: dialed.udid.clone(),
+                                })
+                                .await;
+                            snapshot_tx.send_modify(|s| {
+                                s.state = SessionStateKind::Idle;
+                            });
+                            continue;
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "pairing store read failed");
+                            continue;
+                        }
+                    };
+
+                    let caps = vec![
+                        ccp_protocol::Capability::Hevc,
+                        ccp_protocol::Capability::H264,
+                        ccp_protocol::Capability::RawNv12,
+                    ];
+                    match session::accept_control_usb(&mut dialed.control, &key_b64, &caps).await {
+                        Ok(acc) => {
+                            let cp = ControlPlane::new(events_tx.clone(), snapshot_tx.clone());
+                            let (out_tx, out_rx) =
+                                mpsc::channel::<ccp_protocol::ControlMessage>(16);
+                            *outbound.write().await = Some(out_tx);
+                            let outbound_slot = outbound.clone();
+
+                            // Media stream already opened by supervisor — start MediaPipeline directly.
+                            let snapshot_sinks: Vec<_> =
+                                sinks.read().await.iter().cloned().collect();
+                            let decoder: Arc<dyn Decoder> = Arc::new(PassthroughDecoder);
+                            let _pipeline =
+                                MediaPipeline::spawn(dialed.media, snapshot_sinks, decoder);
+
+                            tokio::spawn(async move {
+                                if let Err(e) =
+                                    cp.run_with_outbound(acc, dialed.control, out_rx).await
+                                {
+                                    tracing::warn!(error = ?e, "usb control plane exited");
+                                }
+                                *outbound_slot.write().await = None;
+                            });
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "usb handshake failed");
+                            snapshot_tx.send_modify(|s| {
+                                s.state = SessionStateKind::Idle;
+                            });
+                        }
+                    }
+                }
+                sup_handle.abort();
+            })
+        };
 
         let mut g = self.usb_supervisor_task.lock().await;
         if let Some(prev) = g.replace(consumer) {
@@ -175,6 +239,33 @@ impl AppHandle {
             recommended,
         })
     }
+
+    /// Test-only constructor: builds an AppHandle with no Wi-Fi listeners,
+    /// suitable for driving USB-only sessions through the supervisor.
+    #[cfg(any(test, feature = "test-util"))]
+    pub async fn for_tests_with_pairing(_store: Arc<PairingStore>) -> Self {
+        let (events_tx, events_rx) = mpsc::channel(32);
+        let (snapshot_tx, snapshot_rx) = watch::channel(SessionSnapshot::idle());
+        let sinks = Arc::new(RwLock::new(Vec::new()));
+        let outbound = Arc::new(RwLock::new(None));
+        Self {
+            qr: QrPayload {
+                v: 1,
+                host: "127.0.0.1".into(),
+                cport: 0,
+                mport: 0,
+                token: "test".into(),
+            },
+            snapshot: snapshot_rx,
+            events: Arc::new(Mutex::new(events_rx)),
+            sinks,
+            outbound,
+            accept_task: tokio::spawn(async {}), // no-op
+            usb_supervisor_task: Mutex::new(None),
+            snapshot_tx,
+            events_tx,
+        }
+    }
 }
 
 fn default_iphone_caps() -> Vec<AvailableMode> {
@@ -241,6 +332,9 @@ impl AppCore {
 
         let sinks: Arc<RwLock<Vec<Arc<dyn FrameSink>>>> = Arc::new(RwLock::new(Vec::new()));
         let outbound: Arc<RwLock<Option<OutboundSender>>> = Arc::new(RwLock::new(None));
+        // Clone senders before moving into accept loop so USB consumer can share them.
+        let snapshot_tx_for_handle = snapshot_tx.clone();
+        let events_tx_for_handle = events_tx.clone();
         let accept_task = spawn_accept_loop(
             wifi_rx,
             events_tx,
@@ -264,6 +358,8 @@ impl AppCore {
             outbound,
             accept_task,
             usb_supervisor_task: Mutex::new(None),
+            snapshot_tx: snapshot_tx_for_handle,
+            events_tx: events_tx_for_handle,
         })
     }
 }
