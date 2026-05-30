@@ -8,7 +8,7 @@ use std::time::Duration;
 use ccp_protocol::{
     Auth, BatteryState, CameraEntry, CameraList, CameraPosition, Capability, Codec,
     ControlEnvelope, ControlMessage, DeviceIdent, DeviceInfo, Flags, Hello, MediaHeader, MediaType,
-    Pong, Telemetry, ThermalState, PROTO_VER,
+    ModeApplied, Pong, Telemetry, ThermalState, PROTO_VER,
 };
 use mediapipeline::write_media_frame;
 use session::{keepalive::now_usec, write_media_hello, MediaBinding};
@@ -292,6 +292,21 @@ pub(crate) async fn run_session(
                                     body: ControlMessage::Pong(Pong {
                                         ts_usec: now_usec(),
                                         echo_usec: p.ts_usec,
+                                    }),
+                                })
+                                .await?;
+                        }
+                        ControlMessage::SetMode(sm) => {
+                            info!(?sm.mode, "mock-iphone: SET_MODE received; emitting MODE_APPLIED");
+                            seq += 1;
+                            control
+                                .send(&ControlEnvelope {
+                                    seq,
+                                    ack: Some(env.seq),
+                                    body: ControlMessage::ModeApplied(ModeApplied {
+                                        mode: sm.mode.clone(),
+                                        at_seq: 0, // synthetic; real iPhone would set this to the first
+                                                   // media seq emitted under the new mode.
                                     }),
                                 })
                                 .await?;
