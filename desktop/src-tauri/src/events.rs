@@ -1,3 +1,8 @@
+#[allow(dead_code)]
+pub const TRANSPORT_CHANGED: &str = "session://transport_changed";
+#[allow(dead_code)]
+pub const USB_TRUST_REQUEST: &str = "session://usb_trust_request";
+
 use session::ControlPlaneEvent;
 use tauri::Emitter;
 use tracing::warn;

@@ -88,3 +88,17 @@ export type SpeedtestOutcome = {
   measurement: Measurement;
   recommended: Mode;
 };
+
+export type TransportSource = "wifi" | "usb";
+
+export interface UsbDevice {
+  id: number;
+  udid: string;
+  productId?: number;
+  trusted: boolean;
+}
+
+export interface TrustRequest {
+  udid: string;
+  productId?: number;
+}

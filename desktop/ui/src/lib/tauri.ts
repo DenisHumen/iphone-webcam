@@ -8,6 +8,9 @@ import type {
   SessionStateKind,
   SpeedtestOutcome,
   Telemetry,
+  TransportSource,
+  TrustRequest,
+  UsbDevice,
 } from "./types";
 
 export async function startServer(): Promise<QrPayloadOut> {
@@ -48,4 +51,24 @@ export async function setCamera(id: string): Promise<void> {
 
 export async function runSpeedtest(): Promise<SpeedtestOutcome> {
   return invoke("run_speedtest");
+}
+
+export async function listUsbDevices(): Promise<UsbDevice[]> {
+  return invoke("list_usb_devices");
+}
+
+export async function trustUsbDevice(udid: string): Promise<void> {
+  return invoke("trust_usb_device", { udid });
+}
+
+export async function forgetUsbDevice(udid: string): Promise<void> {
+  return invoke("forget_usb_device", { udid });
+}
+
+export async function onTransportChanged(cb: (src: TransportSource) => void): Promise<UnlistenFn> {
+  return listen<TransportSource>("session://transport_changed", (e) => cb(e.payload));
+}
+
+export async function onTrustRequest(cb: (req: TrustRequest) => void): Promise<UnlistenFn> {
+  return listen<TrustRequest>("session://usb_trust_request", (e) => cb(e.payload));
 }

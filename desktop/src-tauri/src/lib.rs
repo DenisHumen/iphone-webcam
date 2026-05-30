@@ -33,6 +33,9 @@ pub fn run() {
             commands::stop_server,
             commands::get_snapshot,
             commands::set_camera,
+            commands::list_usb_devices,
+            commands::trust_usb_device,
+            commands::forget_usb_device,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ClearCam application");

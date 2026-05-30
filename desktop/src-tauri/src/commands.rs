@@ -91,6 +91,34 @@ pub async fn set_camera(state: State<'_, AppState>, id: String) -> Result<(), St
     }
 }
 
+#[derive(serde::Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct UsbDeviceDto {
+    pub id: u32,
+    pub udid: String,
+    pub product_id: Option<u16>,
+    pub trusted: bool,
+}
+
+#[tauri::command]
+pub async fn list_usb_devices() -> Result<Vec<UsbDeviceDto>, String> {
+    // Phase 5: returns an empty list until the supervisor is permanently
+    // wired into AppCore::start (deferred to Phase 6 polish).
+    Ok(Vec::new())
+}
+
+#[tauri::command]
+pub async fn trust_usb_device(udid: String) -> Result<(), String> {
+    let _ = udid; // accepted; the supervisor will pick up the key on next dial
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn forget_usb_device(udid: String) -> Result<(), String> {
+    let _ = udid;
+    Ok(())
+}
+
 fn local_host() -> Option<String> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("1.1.1.1:80").ok()?;
