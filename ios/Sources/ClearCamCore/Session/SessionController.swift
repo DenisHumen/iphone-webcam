@@ -6,6 +6,27 @@ public enum SessionError: Error, Equatable, Sendable {
     case helloAckMissing
     case authFailed(String)
     case transport(String)
+    case trustDenied
+}
+
+/// The credential sent in the AUTH frame during the handshake.
+///
+/// - `token`:      Legacy bearer token (Wi-Fi sessions from Phase 1-4).
+/// - `pairingKey`: HMAC-quality 32-byte shared secret (USB sessions from Phase 5).
+///                 Transmitted as base-64 without padding inside the `token` field
+///                 of the existing `Auth` wire message, keeping the protocol
+///                 backward-compatible.
+public enum AuthCredential: Sendable {
+    case token(String)
+    case pairingKey(PairingKey)
+
+    /// The string value placed in `Auth.token` on the wire.
+    public var wireToken: String {
+        switch self {
+        case .token(let t): return t
+        case .pairingKey(let k): return k.base64NoPad
+        }
+    }
 }
 
 /// Drives the iPhone-side handshake state machine: HELLO → AUTH → MEDIA_HELLO.
@@ -75,6 +96,19 @@ public actor SessionController {
             try await engine.start(cameraId: first.id)
             activeCameraId = first.id
         }
+    }
+
+    /// Drive the handshake to `.ready` using a typed credential.
+    ///
+    /// For USB sessions use `.pairingKey(_:)`; for legacy Wi-Fi use `.token(_:)`.
+    /// Both variants encode into the same `Auth.token` wire field, keeping the
+    /// protocol backward-compatible.
+    @discardableResult
+    public func connect(
+        credential: AuthCredential,
+        sessionCandidate: String = UUID().uuidString
+    ) async throws -> String {
+        try await connect(token: credential.wireToken, sessionCandidate: sessionCandidate)
     }
 
     /// Drive the handshake to `.ready`. Returns the assigned `sessionId` on success.
