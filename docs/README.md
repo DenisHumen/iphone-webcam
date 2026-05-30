@@ -29,6 +29,7 @@
 | 11 | [11-testing-strategy.md](11-testing-strategy.md) | Стратегия тестирования по всем компонентам |
 | 12 | [12-decisions-log.md](12-decisions-log.md) | Журнал решений (ADR): что выбрали, почему, какие альтернативы отвергли |
 | 13 | [13-glossary.md](13-glossary.md) | Глоссарий терминов |
+| 14 | [14-apple-developer-id-guide.md](14-apple-developer-id-guide.md) | Пошаговое получение Apple Developer ID и сертификатов для подписи macOS-релиза и CMIO-расширения (Фаза 3) |
 
 ---
 
