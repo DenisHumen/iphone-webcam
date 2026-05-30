@@ -17,6 +17,9 @@ pub use pairing_store::{PairingMaterial, PairingStore, PairingStoreError};
 pub mod usb_supervisor;
 pub use usb_supervisor::{DialedStreams, UsbSupervisor};
 
+pub mod adaptation_driver;
+pub use adaptation_driver::AdaptationDriver;
+
 pub mod transport_selector;
 pub use transport_selector::{Candidate, TransportSelector};
 
