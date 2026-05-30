@@ -1,13 +1,23 @@
-#[allow(dead_code)]
 pub const TRANSPORT_CHANGED: &str = "session://transport_changed";
-#[allow(dead_code)]
 pub const USB_TRUST_REQUEST: &str = "session://usb_trust_request";
 
-use session::ControlPlaneEvent;
+use session::{ControlPlaneEvent, SessionStateKind};
 use tauri::Emitter;
 use tracing::warn;
 
+/// Tags inferred from the current `SessionStateKind`. Only the two handshake
+/// variants carry an unambiguous transport hint; `Ready`/`Reconnecting`/
+/// `Idle`/`Closed` inherit whatever the last handshake selected.
+fn transport_hint(kind: &SessionStateKind) -> Option<&'static str> {
+    match kind {
+        SessionStateKind::WifiHandshake => Some("wifi"),
+        SessionStateKind::UsbHandshake { .. } => Some("usb"),
+        _ => None,
+    }
+}
+
 pub async fn pump(app: tauri::AppHandle, state: super::commands::AppState) {
+    let mut last_transport: Option<&'static str> = None;
     loop {
         let events = {
             let guard = state.lock().await;
@@ -24,6 +34,17 @@ pub async fn pump(app: tauri::AppHandle, state: super::commands::AppState) {
             }
             Some(ev) => match ev {
                 ControlPlaneEvent::StateChanged(kind) => {
+                    // Emit `session://transport_changed` whenever a new
+                    // handshake variant tells us which transport is now
+                    // active. Ready/Idle states reuse the prior hint.
+                    if let Some(hint) = transport_hint(&kind) {
+                        if Some(hint) != last_transport {
+                            if let Err(e) = app.emit(TRANSPORT_CHANGED, &hint) {
+                                warn!(error = ?e, "emit session://transport_changed failed");
+                            }
+                            last_transport = Some(hint);
+                        }
+                    }
                     if let Err(e) = app.emit("session://state", &kind) {
                         warn!(error = ?e, "emit session://state failed");
                     }
