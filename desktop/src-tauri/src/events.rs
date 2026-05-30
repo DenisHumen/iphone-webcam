@@ -1,17 +1,23 @@
 pub const TRANSPORT_CHANGED: &str = "session://transport_changed";
 pub const USB_TRUST_REQUEST: &str = "session://usb_trust_request";
 
-use session::{ControlPlaneEvent, SessionStateKind};
+use session::{ControlPlaneEvent, SessionStateKind, TransportTag};
 use tauri::Emitter;
 use tracing::warn;
 
-/// Tags inferred from the current `SessionStateKind`. Only the two handshake
-/// variants carry an unambiguous transport hint; `Ready`/`Reconnecting`/
-/// `Idle`/`Closed` inherit whatever the last handshake selected.
+/// Tags inferred from the current `SessionStateKind`. Handshake variants and
+/// `Ready { transport }` all carry an explicit hint; `Reconnecting`/`Idle`/
+/// `Closed` inherit whatever the last handshake selected.
 fn transport_hint(kind: &SessionStateKind) -> Option<&'static str> {
     match kind {
         SessionStateKind::WifiHandshake => Some("wifi"),
         SessionStateKind::UsbHandshake { .. } => Some("usb"),
+        SessionStateKind::Ready {
+            transport: Some(TransportTag::Wifi),
+        } => Some("wifi"),
+        SessionStateKind::Ready {
+            transport: Some(TransportTag::Usb),
+        } => Some("usb"),
         _ => None,
     }
 }

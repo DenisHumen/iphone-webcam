@@ -14,7 +14,7 @@ use transport::ControlStream;
 use crate::error::SessionError;
 use crate::handshake::AcceptedSession;
 use crate::keepalive::{now_usec, DEAD_PEER_AFTER, KEEPALIVE_INTERVAL};
-use crate::state::{DeviceSnapshot, SessionSnapshot, SessionStateKind};
+use crate::state::{DeviceSnapshot, SessionSnapshot, SessionStateKind, TransportTag};
 
 /// Outbound message queue: callers send `ControlMessage`s and the ControlPlane
 /// stamps them with a fresh `seq` and writes them onto the wire.
@@ -37,6 +37,7 @@ pub enum ControlPlaneEvent {
 pub struct ControlPlane {
     events_tx: mpsc::Sender<ControlPlaneEvent>,
     snapshot_tx: watch::Sender<SessionSnapshot>,
+    transport: TransportTag,
 }
 
 impl ControlPlane {
@@ -45,10 +46,12 @@ impl ControlPlane {
     pub fn new(
         events_tx: mpsc::Sender<ControlPlaneEvent>,
         snapshot_tx: watch::Sender<SessionSnapshot>,
+        transport: TransportTag,
     ) -> Self {
         Self {
             events_tx,
             snapshot_tx,
+            transport,
         }
     }
 
@@ -56,6 +59,7 @@ impl ControlPlane {
     /// receivers alongside the actor.
     pub fn with_owned_channels(
         events_capacity: usize,
+        transport: TransportTag,
     ) -> (
         Self,
         mpsc::Receiver<ControlPlaneEvent>,
@@ -63,7 +67,11 @@ impl ControlPlane {
     ) {
         let (events_tx, events_rx) = mpsc::channel(events_capacity);
         let (snapshot_tx, snapshot_rx) = watch::channel(SessionSnapshot::idle());
-        (Self::new(events_tx, snapshot_tx), events_rx, snapshot_rx)
+        (
+            Self::new(events_tx, snapshot_tx, transport),
+            events_rx,
+            snapshot_rx,
+        )
     }
 
     pub async fn run(
@@ -82,7 +90,14 @@ impl ControlPlane {
         mut outbound: OutboundReceiver,
     ) -> Result<(), SessionError> {
         info!(session_id = %accepted.session_id, "control plane running");
-        self.broadcast(SessionStateKind::Ready, None, None).await;
+        self.broadcast(
+            SessionStateKind::Ready {
+                transport: Some(self.transport),
+            },
+            None,
+            None,
+        )
+        .await;
 
         let mut seq: u64 = 100;
         let mut last_rx = Instant::now();
@@ -142,7 +157,7 @@ impl ControlPlane {
                         ControlMessage::DeviceInfo(di) => {
                             let snap = DeviceSnapshot::from_device_info(&di);
                             let _ = self.events_tx.send(ControlPlaneEvent::DeviceInfo(snap.clone())).await;
-                            self.broadcast(SessionStateKind::Ready, Some(snap), None).await;
+                            self.broadcast(SessionStateKind::Ready { transport: Some(self.transport) }, Some(snap), None).await;
                         }
                         ControlMessage::CameraList(cl) => {
                             let mut snap = self.snapshot_tx.borrow().clone();
@@ -227,7 +242,7 @@ mod tests {
         let srv = ControlStream::from_halves(peer(), ra, wa);
         let mut cli = ControlStream::from_halves(peer(), rb, wb);
 
-        let (cp, mut rx, snap_rx) = ControlPlane::with_owned_channels(16);
+        let (cp, mut rx, snap_rx) = ControlPlane::with_owned_channels(16, TransportTag::Wifi);
         let accepted = AcceptedSession {
             session_id: "sess-1".into(),
             token: "t".into(),

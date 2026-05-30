@@ -137,7 +137,11 @@ impl AppHandle {
                     ];
                     match session::accept_control_usb(&mut dialed.control, &key_b64, &caps).await {
                         Ok(acc) => {
-                            let cp = ControlPlane::new(events_tx.clone(), snapshot_tx.clone());
+                            let cp = ControlPlane::new(
+                                events_tx.clone(),
+                                snapshot_tx.clone(),
+                                session::TransportTag::Usb,
+                            );
                             let (out_tx, out_rx) =
                                 mpsc::channel::<ccp_protocol::ControlMessage>(16);
                             *outbound.write().await = Some(out_tx);
@@ -412,7 +416,11 @@ fn spawn_accept_loop(
                                     let _pipeline = MediaPipeline::spawn(ms, snapshot, decoder);
                                 }
                             });
-                            let cp = ControlPlane::new(events_tx.clone(), snapshot_tx.clone());
+                            let cp = ControlPlane::new(
+                                events_tx.clone(),
+                                snapshot_tx.clone(),
+                                session::TransportTag::Wifi,
+                            );
                             let (out_tx, out_rx) = mpsc::channel::<ControlMessage>(16);
                             *outbound_slot.write().await = Some(out_tx);
                             let outbound_slot_for_session = outbound_slot.clone();

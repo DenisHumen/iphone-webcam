@@ -63,13 +63,13 @@ async fn usb_supervisor_drives_session_to_ready() {
 
     let snap = app.snapshot.clone();
     for _ in 0..200 {
-        if matches!(snap.borrow().state, SessionStateKind::Ready) {
+        if matches!(snap.borrow().state, SessionStateKind::Ready { .. }) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(
-        matches!(snap.borrow().state, SessionStateKind::Ready),
+        matches!(snap.borrow().state, SessionStateKind::Ready { .. }),
         "expected Ready, got {:?}",
         snap.borrow().state
     );

@@ -29,7 +29,10 @@ pub enum SessionStateKind {
     UsbHandshake {
         udid: String,
     },
-    Ready,
+    Ready {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transport: Option<TransportTag>,
+    },
     Reconnecting,
     Closed {
         reason: String,
@@ -45,13 +48,17 @@ impl SessionStateKind {
         Self::UsbHandshake { udid: udid.into() }
     }
 
+    pub fn ready(transport: Option<TransportTag>) -> Self {
+        Self::Ready { transport }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             Self::Idle => "idle",
             Self::Listening { .. } => "listening",
             Self::WifiHandshake => "handshaking",
             Self::UsbHandshake { .. } => "usb_handshake",
-            Self::Ready => "ready",
+            Self::Ready { .. } => "ready",
             Self::Reconnecting => "reconnecting",
             Self::Closed { .. } => "closed",
         }
@@ -187,5 +194,33 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains(r#""kind":"usb_handshake""#));
         assert!(json.contains(r#""udid":"ABC""#));
+    }
+
+    #[test]
+    fn ready_carries_optional_transport_tag() {
+        let r = SessionStateKind::ready(Some(TransportTag::Usb));
+        assert_eq!(r.label(), "ready");
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains(r#""kind":"ready""#));
+        assert!(
+            json.contains(r#""transport":"usb""#),
+            "expected transport tag in JSON, got: {json}"
+        );
+    }
+
+    #[test]
+    fn legacy_ready_payload_still_deserializes() {
+        let s: SessionStateKind = serde_json::from_str(r#"{"kind":"ready"}"#).unwrap();
+        assert!(
+            matches!(s, SessionStateKind::Ready { transport: None }),
+            "got {s:?}"
+        );
+    }
+
+    #[test]
+    fn ready_none_serializes_without_transport_field() {
+        let r = SessionStateKind::ready(None);
+        let json = serde_json::to_string(&r).unwrap();
+        assert_eq!(json, r#"{"kind":"ready"}"#);
     }
 }

@@ -13,4 +13,6 @@ pub use controlplane::{ControlPlane, ControlPlaneEvent, OutboundReceiver, Outbou
 pub use error::SessionError;
 pub use handshake::{accept_control, accept_control_usb, AcceptedSession, HANDSHAKE_TIMEOUT};
 pub use pairing::{read_media_hello, write_media_hello, MediaBinding, MEDIA_HANDSHAKE_TIMEOUT};
-pub use state::{DeviceSnapshot, PendingMediaBindings, SessionSnapshot, SessionStateKind};
+pub use state::{
+    DeviceSnapshot, PendingMediaBindings, SessionSnapshot, SessionStateKind, TransportTag,
+};

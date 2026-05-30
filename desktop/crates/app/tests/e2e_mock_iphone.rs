@@ -87,7 +87,7 @@ async fn mock_iphone_drives_session_to_ready() {
     for _ in 0..50 {
         sleep(Duration::from_millis(50)).await;
         let s = snap.borrow_and_update().clone();
-        if matches!(s.state, SessionStateKind::Ready) {
+        if matches!(s.state, SessionStateKind::Ready { .. }) {
             if let Some(device) = s.device.as_ref() {
                 assert_eq!(device.model, "iPhone15,3");
                 handle.shutdown();
