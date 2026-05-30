@@ -17,7 +17,6 @@ async fn pick_free_port() -> u16 {
     p
 }
 
-#[ignore = "needs Task 4: mock-iphone must send Auth::PairingKey in USB mode"]
 #[tokio::test]
 async fn usb_supervisor_drives_session_to_ready() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();

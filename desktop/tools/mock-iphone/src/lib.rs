@@ -182,12 +182,21 @@ pub(crate) async fn run_session(
         other => anyhow::bail!("expected HELLO_ACK, got {other:?}"),
     }
 
+    // In Wi-Fi-client mode the `--token` value is the QR token (per
+    // ADR-011); in USB-listener mode the same CLI arg carries the stored
+    // pairing key value (per Phase 5 Task 7 + Phase 6a Task 2). The desktop
+    // `accept_control_usb` rejects token-AUTH on USB, so the variant must
+    // match the actual transport.
+    let auth_body = match args.transport {
+        TransportMode::WifiClient => Auth::token(args.token.clone()),
+        TransportMode::UsbListener => Auth::pairing_key(args.token.clone()),
+    };
     seq += 1;
     control
         .send(&ControlEnvelope {
             seq,
             ack: None,
-            body: ControlMessage::Auth(Auth::token(args.token.clone())),
+            body: ControlMessage::Auth(auth_body),
         })
         .await?;
     let auth_ok = control.recv().await?;
