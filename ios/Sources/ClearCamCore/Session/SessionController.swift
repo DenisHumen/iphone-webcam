@@ -101,14 +101,21 @@ public actor SessionController {
     /// Drive the handshake to `.ready` using a typed credential.
     ///
     /// For USB sessions use `.pairingKey(_:)`; for legacy Wi-Fi use `.token(_:)`.
-    /// Both variants encode into the same `Auth.token` wire field, keeping the
-    /// protocol backward-compatible.
+    /// Each variant maps to the corresponding `Auth` wire case.
     @discardableResult
     public func connect(
         credential: AuthCredential,
         sessionCandidate: String = UUID().uuidString
     ) async throws -> String {
-        try await connect(token: credential.wireToken, sessionCandidate: sessionCandidate)
+        let authBody: Auth
+        switch credential {
+        case .token(let t):      authBody = .token(t)
+        case .pairingKey(let k): authBody = .pairingKey(k.base64NoPad)
+        }
+        return try await connect(
+            authBody: authBody,
+            wireToken: credential.wireToken,
+            sessionCandidate: sessionCandidate)
     }
 
     /// Drive the handshake to `.ready`. Returns the assigned `sessionId` on success.
@@ -116,6 +123,19 @@ public actor SessionController {
     public func connect(token: String, sessionCandidate: String = UUID().uuidString) async throws
         -> String
     {
+        try await connect(
+            authBody: .token(token),
+            wireToken: token,
+            sessionCandidate: sessionCandidate)
+    }
+
+    /// Internal implementation used by both `connect(credential:)` and `connect(token:)`.
+    @discardableResult
+    private func connect(
+        authBody: Auth,
+        wireToken: String,
+        sessionCandidate: String
+    ) async throws -> String {
         state = .connecting
         state = .handshaking
 
@@ -155,7 +175,7 @@ public actor SessionController {
 
         seq += 1
         try await controlChannel.send(
-            ControlEnvelope(seq: seq, ack: nil, body: .auth(Auth(token: token))))
+            ControlEnvelope(seq: seq, ack: nil, body: .auth(authBody)))
         let authResp = try await controlChannel.recv()
         let sid: String
         switch authResp.body {
@@ -174,7 +194,7 @@ public actor SessionController {
         try await mediaChannel.send(
             ControlEnvelope(
                 seq: 0, ack: nil,
-                body: .mediaHello(MediaHello(sessionId: sid, token: token))))
+                body: .mediaHello(MediaHello(sessionId: sid, token: wireToken))))
 
         // DEVICE_INFO on control.
         seq += 1

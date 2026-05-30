@@ -53,7 +53,7 @@ final class ControlMessageJSONTests: XCTestCase {
                     device: DeviceIdent(model: "m", osVer: "v"),
                     sessionId: "s", caps: [.hevc])),
             .helloAck(HelloAck(protoVer: 1, caps: [])),
-            .auth(Auth(token: "t")),
+            .auth(Auth.token("t")),
             .authOk(AuthOk(sessionId: "s")),
             .mediaHello(MediaHello(sessionId: "s", token: "t")),
             .bye(Bye(reason: "done")),

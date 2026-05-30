@@ -38,9 +38,36 @@ public struct HelloAck: Codable, Equatable {
     }
 }
 
-public struct Auth: Codable, Equatable {
-    public var token: String
-    public init(token: String) { self.token = token }
+public enum Auth: Codable, Equatable, Sendable {
+    case token(String)
+    case pairingKey(String)
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .token(let v):      try c.encode(v, forKey: .token)
+        case .pairingKey(let v): try c.encode(v, forKey: .pairingKey)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let token = try c.decodeIfPresent(String.self, forKey: .token) {
+            self = .token(token)
+            return
+        }
+        if let pk = try c.decodeIfPresent(String.self, forKey: .pairingKey) {
+            self = .pairingKey(pk)
+            return
+        }
+        throw DecodingError.dataCorrupted(.init(codingPath: c.codingPath,
+            debugDescription: "AUTH frame has neither token nor pairingKey"))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case token
+        case pairingKey
+    }
 }
 
 public struct AuthOk: Codable, Equatable {

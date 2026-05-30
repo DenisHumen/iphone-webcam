@@ -12,7 +12,7 @@ final class ControlStreamTests: XCTestCase {
         let env = ControlEnvelope(
             seq: 7,
             ack: nil,
-            body: .auth(Auth(token: "secret"))
+            body: .auth(Auth.token("secret"))
         )
         try await client.send(env)
         let got = try await server.recv()
@@ -25,7 +25,7 @@ final class ControlStreamTests: XCTestCase {
         let server = ControlStream(io: pipe.endB)
 
         let envs: [ControlEnvelope] = [
-            ControlEnvelope(seq: 1, body: .auth(Auth(token: "a"))),
+            ControlEnvelope(seq: 1, body: .auth(Auth.token("a"))),
             ControlEnvelope(seq: 2, body: .bye(Bye(reason: "hi"))),
             ControlEnvelope(seq: 3, body: .ping(Ping(tsUsec: 123))),
         ]

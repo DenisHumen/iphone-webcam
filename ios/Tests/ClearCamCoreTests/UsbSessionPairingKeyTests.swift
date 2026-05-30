@@ -89,7 +89,11 @@ final class UsbSessionPairingKeyTests: XCTestCase {
             guard case .auth(let auth) = authEnv.body else {
                 XCTFail("expected AUTH, got \(authEnv.body)"); return ""
             }
-            capturedToken = auth.token
+            if case .pairingKey(let pk) = auth {
+                capturedToken = pk
+            } else if case .token(let t) = auth {
+                capturedToken = t
+            }
 
             try await serverControl.send(
                 ControlEnvelope(
