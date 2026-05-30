@@ -11,6 +11,10 @@ description = "Mock iPhone client used by integration tests and manual checks (P
 name = "mock-iphone"
 path = "src/main.rs"
 
+[lib]
+name = "mock_iphone"
+path = "src/lib.rs"
+
 [dependencies]
 ccp-protocol = { path = "../../crates/ccp-protocol" }
 transport = { path = "../../crates/transport" }
