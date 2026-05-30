@@ -103,3 +103,36 @@ UI рисует кадры в `<canvas>`; основной (полнокачес
   drop-oldest backpressure.
 - Интеграция: мок-iPhone (Rust), гоняющий протокол по loopback → проверка пути до `FrameSink`-мока.
 - Платформенный ручной чек-лист: виртуальная камера появляется в Zoom/Meet/OBS/QuickTime (macOS v1).
+
+## USB transport
+
+USB ставится на тот же протокол CCP. Десктоп набирает (dial), iPhone слушает —
+зеркально к Wi-Fi (ADR-010). Поверх usbmuxd десктоп получает обычный TCP-сокет
+до фиксированных портов внутри устройства (7000 control, 7001 media).
+
+**Адаптация в коде Rust-ядра:**
+
+- `transport::usb::UsbConductor` — трейт, скрывающий backend. Две реализации:
+  - `LoopbackConductor` (TCP по 127.0.0.1) — используется в CI и `dev-usb.sh`.
+  - `IdeviceConductor` (за фичей `usb-idevice`, крейт `idevice`, ADR-022) —
+    производственный путь.
+- `transport::usb::open_pair(conductor, device_id, udid, label)` — дозванивается
+  до пары портов и возвращает `(ControlStream, MediaStream)` с `peer.source =
+  Source::Usb { udid }`.
+- `app::UsbSupervisor` опрашивает шину каждые 50 мс, на `Connected(device)`
+  вызывает `open_pair`, обращается к `PairingStore` за сохранённым `pairingKey`
+  и отдаёт `DialedStreams` потребителю.
+- `app::TransportSelector` решает, какая сессия (Wi-Fi vs USB) активна для
+  данного UDID; кабель выигрывает (ADR-004/010).
+- `app::PairingStore` хранит ключи в TOML по `<config>/clearcam/pairings.toml`
+  (atomic write + Debug-redacted in-memory secret).
+
+**Что отложено в Phase 6** (полировка):
+
+- Прокидывание реальной сессии iOS↔Desktop через USB-handshake (Task 12
+  оставил `start_usb_supervisor` логирующим DialedStreams; production
+  handshake — Phase 6).
+- iOS-сторона `ClearCamProtocol::Auth` пока единый формат `{token}`; десктоп
+  поддерживает оба (`{token}` и `{pairingKey}`). Расщепление Swift `Auth` —
+  Phase 6 при полной USB-handshake интеграции.
+- Mid-stream Wi-Fi↔USB переключение без разрыва.

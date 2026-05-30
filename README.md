@@ -37,6 +37,15 @@ Zoom, Google Meet, OBS, приложения записи и т. д.
 
 ---
 
+### USB transport prerequisites
+
+- **macOS:** usbmuxd is part of "Apple Mobile Device" — встроен.
+- **Linux:** `./scripts/setup-linux-usbmuxd.sh` ставит пакет и поднимает службу.
+- **Windows:** требуется Apple Mobile Device Support (входит в iTunes/Apple
+  Devices). USB-таргет на Windows ещё не валидирован (Phase 7).
+
+---
+
 ## Документация
 
 Вся проектная документация — в каталоге **[`docs/`](docs/)**. Начните с **[docs/README.md](docs/README.md)** —

@@ -77,6 +77,23 @@ USB-подключения авто-устанавливаются без QR.
 5. media-соединение: клиент → `MEDIA_HELLO` с тем же `sessionId` + `token` → сервер связывает его с
    control-сессией. Несвязанное media-соединение закрывается.
 
+**Пример JSON `AUTH` (Wi-Fi):**
+
+```json
+{ "t": "AUTH", "seq": 3, "token": "b6f3..." }
+```
+
+**Пример JSON `AUTH` (USB, привязанное устройство):**
+
+```json
+{ "t": "AUTH", "seq": 3, "pairingKey": "VL0e..." }
+```
+
+Поле `token` и `pairingKey` обрабатываются как взаимоисключающие альтернативы.
+Десктоп различает их по присутствующему ключу. См. реализацию: `ccp-protocol::Auth`
+(`untagged` serde enum), `session::handshake` отвергает `PairingKey` на Wi-Fi-пути
+с `ErrorCode::Unauthorized` (USB-путь будет принимать его в Phase 6).
+
 Тайм-аут handshake — 5 c. Незавершённый handshake → закрытие.
 
 ## 5. Формат кадрирования (framing)

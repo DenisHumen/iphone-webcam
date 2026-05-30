@@ -70,6 +70,7 @@ dependencies = [
  "decode",
  "directories",
  "mediapipeline",
+ "mock-iphone",
  "qrcode",
  "rand 0.8.6",
  "serde",
@@ -81,6 +82,7 @@ dependencies = [
  "tokio",
  "toml 0.8.2",
  "tracing",
+ "tracing-subscriber",
  "transport",
 ]
 
