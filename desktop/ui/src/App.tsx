@@ -5,16 +5,26 @@ import PreviewCanvas from "./components/PreviewCanvas";
 import ServerCard from "./components/ServerCard";
 import SpeedtestPanel from "./components/SpeedtestPanel";
 import StatusBadge from "./components/StatusBadge";
+import { TransportBadge } from "./components/TransportBadge";
+import { TrustDialog } from "./components/TrustDialog";
+import { UsbDevicesList } from "./components/UsbDevicesList";
 import {
   getSnapshot,
   onClosed,
   onDevice,
   onSessionState,
   onTelemetry,
+  onTransportChanged,
   startServer,
   stopServer,
 } from "./lib/tauri";
-import type { DeviceSnapshot, QrPayloadOut, SessionStateKind, Telemetry } from "./lib/types";
+import type {
+  DeviceSnapshot,
+  QrPayloadOut,
+  SessionStateKind,
+  Telemetry,
+  TransportSource,
+} from "./lib/types";
 
 export default function App() {
   const [qr, setQr] = useState<QrPayloadOut | null>(null);
@@ -23,6 +33,14 @@ export default function App() {
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
   const [activeCameraId, setActiveCameraId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [transport, setTransport] = useState<TransportSource>("wifi");
+
+  useEffect(() => {
+    const off = onTransportChanged(setTransport);
+    return () => {
+      off.then((u) => u());
+    };
+  }, []);
 
   useEffect(() => {
     const off: Array<() => void> = [];
@@ -94,9 +112,12 @@ export default function App() {
         <header className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold">ClearCam</h1>
-            <p className="text-sm text-neutral-400">iPhone-as-webcam · Phase 4</p>
+            <p className="text-sm text-neutral-400">iPhone-as-webcam · Phase 5</p>
           </div>
-          <StatusBadge state={state} />
+          <div className="flex items-center gap-2">
+            <TransportBadge source={transport} />
+            <StatusBadge state={state} />
+          </div>
         </header>
 
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
@@ -126,7 +147,13 @@ export default function App() {
             />
           </>
         )}
+
+        <aside className="rounded-2xl border border-neutral-800 bg-neutral-900 p-4">
+          <h2 className="text-sm font-semibold text-neutral-300 mb-2">USB Devices</h2>
+          <UsbDevicesList />
+        </aside>
       </div>
+      <TrustDialog />
     </main>
   );
 }
