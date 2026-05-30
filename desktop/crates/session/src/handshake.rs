@@ -118,6 +118,122 @@ pub async fn accept_control(
     })
 }
 
+/// USB-side handshake variant. Mirrors `accept_control` but expects an
+/// `Auth::PairingKey` whose value equals `expected_pairing_key_b64`. The
+/// returned `AcceptedSession.token` is set to the pairing key so downstream
+/// code (media-stream pairing) sees a single uniform "credential" string.
+///
+/// Reject paths:
+/// - `Auth::Token { .. }` on this path → `SessionError::Unauthorized`
+///   (USB sessions must present the pairing key).
+/// - `Auth::PairingKey { pairing_key }` where the value mismatches → same.
+pub async fn accept_control_usb(
+    stream: &mut ControlStream,
+    expected_pairing_key_b64: &str,
+    server_caps: &[Capability],
+) -> Result<AcceptedSession, SessionError> {
+    // HELLO / HELLO_ACK
+    let hello_env = timeout(HANDSHAKE_TIMEOUT, stream.recv())
+        .await
+        .map_err(|_| SessionError::HandshakeTimeout)??;
+    let hello = match hello_env.body {
+        ControlMessage::Hello(h) => h,
+        other => {
+            warn!(?other, "first frame was not HELLO");
+            send_error(
+                stream,
+                hello_env.seq,
+                ErrorCode::BadRequest,
+                "expected HELLO",
+            )
+            .await?;
+            return Err(SessionError::UnexpectedMessage("expected HELLO"));
+        }
+    };
+    if hello.proto_ver != PROTO_VER {
+        send_error(
+            stream,
+            hello_env.seq,
+            ErrorCode::IncompatibleVersion,
+            "proto version mismatch",
+        )
+        .await?;
+        return Err(SessionError::IncompatibleProtoVer {
+            peer: hello.proto_ver,
+            local: PROTO_VER,
+        });
+    }
+    let agreed_caps: Vec<Capability> = server_caps
+        .iter()
+        .filter(|c| hello.caps.iter().any(|h| h == *c))
+        .cloned()
+        .collect();
+    stream
+        .send(&ControlEnvelope {
+            seq: 0,
+            ack: Some(hello_env.seq),
+            body: ControlMessage::HelloAck(HelloAck {
+                proto_ver: PROTO_VER,
+                caps: agreed_caps,
+            }),
+        })
+        .await?;
+
+    // AUTH (PairingKey only)
+    let auth_env = timeout(HANDSHAKE_TIMEOUT, stream.recv())
+        .await
+        .map_err(|_| SessionError::HandshakeTimeout)??;
+    let auth: Auth = match auth_env.body {
+        ControlMessage::Auth(a) => a,
+        other => {
+            warn!(?other, "expected AUTH");
+            send_error(stream, auth_env.seq, ErrorCode::BadRequest, "expected AUTH").await?;
+            return Err(SessionError::UnexpectedMessage("expected AUTH"));
+        }
+    };
+    let presented_key = match &auth {
+        Auth::PairingKey { pairing_key } => pairing_key.clone(),
+        Auth::Token { .. } => {
+            send_error(
+                stream,
+                auth_env.seq,
+                ErrorCode::Unauthorized,
+                "USB session requires pairingKey, not token",
+            )
+            .await?;
+            return Err(SessionError::Unauthorized);
+        }
+    };
+    if presented_key != expected_pairing_key_b64 {
+        send_error(
+            stream,
+            auth_env.seq,
+            ErrorCode::Unauthorized,
+            "pairing key mismatch",
+        )
+        .await?;
+        return Err(SessionError::Unauthorized);
+    }
+
+    // AUTH_OK
+    let session_id = format!("sess-{}", Uuid::new_v4().simple());
+    stream
+        .send(&ControlEnvelope {
+            seq: 1,
+            ack: Some(auth_env.seq),
+            body: ControlMessage::AuthOk(AuthOk {
+                session_id: session_id.clone(),
+            }),
+        })
+        .await?;
+    info!(%session_id, device.model = %hello.device.model, "USB control handshake complete");
+    Ok(AcceptedSession {
+        session_id,
+        token: presented_key,
+        hello,
+    })
+}
+
 async fn send_error(
     stream: &mut ControlStream,
     ack: u64,
@@ -285,6 +401,123 @@ mod tests {
             server.await.unwrap(),
             Err(SessionError::Unauthorized)
         ));
+    }
+
+    async fn drive_hello_authpk_client(client: &mut ControlStream, key_b64: &str) {
+        let hello = ControlEnvelope {
+            seq: 1,
+            ack: None,
+            body: ControlMessage::Hello(Hello {
+                proto_ver: PROTO_VER,
+                app: "test-usb".into(),
+                device: DeviceIdent {
+                    model: "iPhone15,3".into(),
+                    os_ver: "iOS 18.0".into(),
+                },
+                session_id: "candidate".into(),
+                caps: vec![],
+            }),
+        };
+        client.send(&hello).await.unwrap();
+        let _ack = client.recv().await.unwrap();
+        let auth = ControlEnvelope {
+            seq: 2,
+            ack: None,
+            body: ControlMessage::Auth(Auth::pairing_key(key_b64)),
+        };
+        client.send(&auth).await.unwrap();
+        let _ok = client.recv().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn accept_control_usb_happy_path() {
+        let (mut srv, mut cli) = make_pair();
+        let caps = vec![Capability::Hevc];
+        let expected = "stored-key-b64".to_string();
+
+        let task =
+            tokio::spawn(async move { accept_control_usb(&mut srv, &expected, &caps).await });
+
+        drive_hello_authpk_client(&mut cli, "stored-key-b64").await;
+
+        let result = task.await.unwrap().expect("handshake should succeed");
+        assert_eq!(result.token, "stored-key-b64");
+    }
+
+    #[tokio::test]
+    async fn accept_control_usb_rejects_wrong_pairing_key() {
+        let (mut srv, mut cli) = make_pair();
+        let caps = vec![Capability::Hevc];
+        let expected = "stored-key-b64".to_string();
+
+        let task =
+            tokio::spawn(async move { accept_control_usb(&mut srv, &expected, &caps).await });
+
+        // drive_hello_authpk_client sends AUTH_OK recv — but server returns error,
+        // so the client recv will get an error frame instead; we don't assert the
+        // client side, only the server result.
+        let hello = ControlEnvelope {
+            seq: 1,
+            ack: None,
+            body: ControlMessage::Hello(Hello {
+                proto_ver: PROTO_VER,
+                app: "test-usb".into(),
+                device: DeviceIdent {
+                    model: "iPhone15,3".into(),
+                    os_ver: "iOS 18.0".into(),
+                },
+                session_id: "candidate".into(),
+                caps: vec![],
+            }),
+        };
+        cli.send(&hello).await.unwrap();
+        let _ack = cli.recv().await.unwrap();
+        let auth = ControlEnvelope {
+            seq: 2,
+            ack: None,
+            body: ControlMessage::Auth(Auth::pairing_key("wrong-key")),
+        };
+        cli.send(&auth).await.unwrap();
+        let _err = cli.recv().await.unwrap(); // server sends ERROR(Unauthorized)
+
+        let err = task.await.unwrap().unwrap_err();
+        assert!(matches!(err, SessionError::Unauthorized));
+    }
+
+    #[tokio::test]
+    async fn accept_control_usb_rejects_token_auth() {
+        let (mut srv, mut cli) = make_pair();
+        let caps: Vec<Capability> = vec![];
+
+        let task = tokio::spawn(async move { accept_control_usb(&mut srv, "k", &caps).await });
+
+        // Client sends HELLO then AUTH with a plain token (legacy Wi-Fi path).
+        let hello = ControlEnvelope {
+            seq: 1,
+            ack: None,
+            body: ControlMessage::Hello(Hello {
+                proto_ver: PROTO_VER,
+                app: "test".into(),
+                device: DeviceIdent {
+                    model: "iPhone15,3".into(),
+                    os_ver: "iOS 18.0".into(),
+                },
+                session_id: "candidate".into(),
+                caps: vec![],
+            }),
+        };
+        cli.send(&hello).await.unwrap();
+        let _ack = cli.recv().await.unwrap();
+        let auth = ControlEnvelope {
+            seq: 2,
+            ack: None,
+            body: ControlMessage::Auth(Auth::token("plain-token")),
+        };
+        cli.send(&auth).await.unwrap();
+        let _err = cli.recv().await.unwrap(); // server sends ERROR(Unauthorized)
+
+        let err = task.await.unwrap().unwrap_err();
+        assert!(matches!(err, SessionError::Unauthorized));
     }
 
     #[tokio::test]
