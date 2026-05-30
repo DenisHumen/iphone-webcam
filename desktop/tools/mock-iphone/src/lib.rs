@@ -15,7 +15,28 @@ use session::{keepalive::now_usec, write_media_hello, MediaBinding};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tracing::{info, warn};
-use transport::{wifi_connect, ControlStream, MediaStream};
+use transport::{wifi_connect, ControlStream, MediaStream, PeerInfo, Source};
+
+// ---------------------------------------------------------------------------
+// TransportMode
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy)]
+pub enum TransportMode {
+    WifiClient,
+    UsbListener,
+}
+
+impl std::str::FromStr for TransportMode {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "wifi" | "wifi-client" => Ok(Self::WifiClient),
+            "usb" | "usb-listener" => Ok(Self::UsbListener),
+            other => anyhow::bail!("unknown --transport {other:?}"),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Args
@@ -31,6 +52,7 @@ pub struct Args {
     pub height: u16,
     pub fps: u32,
     pub send_video: bool,
+    pub transport: TransportMode,
 }
 
 pub fn parse_args() -> anyhow::Result<Args> {
@@ -42,6 +64,7 @@ pub fn parse_args() -> anyhow::Result<Args> {
     let mut height: u16 = 720;
     let mut fps: u32 = 30;
     let mut send_video = true;
+    let mut transport = TransportMode::WifiClient;
     let mut it = env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -53,10 +76,14 @@ pub fn parse_args() -> anyhow::Result<Args> {
             "--height" => height = it.next().and_then(|s| s.parse().ok()).unwrap_or(720),
             "--fps" => fps = it.next().and_then(|s| s.parse().ok()).unwrap_or(30),
             "--no-video" => send_video = false,
+            "--transport" => {
+                let v = it.next().unwrap_or_default();
+                transport = v.parse()?;
+            }
             "--help" | "-h" => {
                 println!(
                     "mock-iphone --host <host> --cport <port> --mport <port> --token <token> \
-                     [--width N --height N --fps N --no-video]"
+                     [--width N --height N --fps N --no-video --transport wifi|usb]"
                 );
                 std::process::exit(0);
             }
@@ -72,6 +99,7 @@ pub fn parse_args() -> anyhow::Result<Args> {
         height,
         fps,
         send_video,
+        transport,
     })
 }
 
@@ -81,9 +109,43 @@ pub fn parse_args() -> anyhow::Result<Args> {
 
 pub async fn run(args: Args) -> anyhow::Result<()> {
     info!(?args, "mock-iphone starting");
-    let control_addr = format!("{}:{}", args.host, args.cport).parse()?;
-    let media_addr = format!("{}:{}", args.host, args.mport).parse()?;
-    let (control, media) = wifi_connect(control_addr, media_addr).await?;
+    match args.transport {
+        TransportMode::WifiClient => {
+            let control_addr = format!("{}:{}", args.host, args.cport).parse()?;
+            let media_addr = format!("{}:{}", args.host, args.mport).parse()?;
+            let (control, media) = wifi_connect(control_addr, media_addr).await?;
+            run_session(control, media, &args).await
+        }
+        TransportMode::UsbListener => run_usb_listener(args).await,
+    }
+}
+
+async fn run_usb_listener(args: Args) -> anyhow::Result<()> {
+    use tokio::net::TcpListener;
+
+    let cl = TcpListener::bind(format!("127.0.0.1:{}", args.cport)).await?;
+    let ml = TcpListener::bind(format!("127.0.0.1:{}", args.mport)).await?;
+    info!(
+        cport = args.cport,
+        mport = args.mport,
+        "listening for desktop dial"
+    );
+    let (control_sock, c_addr) = cl.accept().await?;
+    let (media_sock, m_addr) = ml.accept().await?;
+    let control = ControlStream::from_tcp(
+        PeerInfo {
+            addr: c_addr,
+            source: Source::Wifi,
+        },
+        control_sock,
+    );
+    let media = MediaStream::from_tcp(
+        PeerInfo {
+            addr: m_addr,
+            source: Source::Wifi,
+        },
+        media_sock,
+    );
     run_session(control, media, &args).await
 }
 
