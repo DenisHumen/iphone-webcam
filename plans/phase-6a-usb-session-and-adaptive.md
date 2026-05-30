@@ -1217,10 +1217,86 @@ git branch -d feature/phase-6a-usb-session-and-adaptive
 
 ---
 
-## Retrospective (fill in during Task 9)
+## Acceptance log
 
-Mirror Phase 5's style:
+### 2026-05-30 — Phase 6a USB session + adaptive
 
-1. **What landed** — bullet list, one line per crate.
-2. **Deviations from the plan** — anything adjusted during execution.
-3. **Open questions** — what to verify on a real iPhone first time Phase 6a runs against hardware.
+**iOS (ClearCamProtocol + ClearCamCore)**
+
+- `Auth` теперь enum `.token(String) | .pairingKey(String)` с ручным `Codable`, который пишет `{"token":"..."}` или `{"pairingKey":"..."}` — точное зеркало desktop'ного untagged-enum (Phase 5 Task 7).
+- `SessionController.connect(credential:)` теперь маршрутизирует на правильный `Auth` вариант (раньше pairingKey шёл в `Auth(token:)` — был latent-баг).
+- Существующие call-site `Auth(token:)` в тестах мигрированы на `Auth.token(...)`.
+- 4 новых теста `AuthCodableTests` + 3 теста `ModeCodableTests`.
+
+**Rust session crate**
+
+- `accept_control_usb(stream, expected_pairing_key_b64, server_caps)` — handshake-вариант, требующий `Auth::PairingKey`. Token-AUTH отвергается с `ErrorCode::Unauthorized`. 3 теста.
+- `ControlPlaneEvent::UsbTrustRequest { udid }` — добавлен; все exhaustive-match сайты обновлены.
+
+**Rust app crate**
+
+- `AppHandle` обзавёлся полями `snapshot_tx` и `events_tx` (Phase 5 их прятал внутри accept-loop'а).
+- `start_usb_supervisor` теперь делает реальный handshake: `accept_control_usb` → `MediaPipeline::spawn` → `ControlPlane::run_with_outbound` → `SessionStateKind::Ready`. На пустом PairingStore — эмиттит `UsbTrustRequest`.
+- `AdaptationDriver::observe(&Telemetry, rtt_ms)` — тонкая обёртка над `adaptive::AdaptationState`, шлёт `SET_MODE` на outbound при congestion. `new_for_tests` бэк-датит `start_at` на 10s в прошлое, чтобы пропустить step-down cooldown в тестах. 2 теста.
+- `for_tests_with_pairing(store)` — тест-конструктор без Wi-Fi listener'а.
+- `feature = "test-util"` + self-referential dev-dep для интеграционных тестов.
+- e2e тест `usb_full_session_e2e` теперь активен (не `#[ignore]`) и реально доводит сессию до `Ready`.
+
+**Tools (mock-iphone)**
+
+- В USB-listener режиме шлёт `Auth::PairingKey(args.token)` вместо `Auth::Token` — `--token` стал полиморфным (token для Wi-Fi, pairing-key b64 для USB).
+- В per-session loop добавлен `SetMode` arm: возвращает `MODE_APPLIED(mode, at_seq=0)` с правильным `ack`.
+
+**Tauri**
+
+- `UsbState { conductor: Arc<dyn UsbConductor>, pairing: Arc<PairingStore> }` — общее состояние.
+- `list_usb_devices` теперь делает реальный `conductor.list_devices()` + lookup в PairingStore (поле `trusted`).
+- `trust_usb_device(udid)` — `pairing.put(udid, PairingMaterial::new_random())`.
+- `forget_usb_device(udid)` — `pairing.forget(udid)`.
+- `lib.rs::run` строит `UsbState` через `tauri::async_runtime::block_on` (LoopbackConductor по умолчанию; IdeviceConductor под `usb-idevice` feature).
+- `src-tauri/Cargo.toml`: добавлен прямой dep на `transport` + feature-passthrough `usb-idevice = ["transport/usb-idevice"]`.
+- `events::pump` теперь эмиттит `session://transport_changed` (по handshake-варианту) и `session://usb_trust_request` (получено от ControlPlane). `#[allow(dead_code)]` снято с обеих констант.
+
+### Gates
+
+- `cargo fmt --check` ✓
+- `cargo clippy --workspace --all-targets -- -D warnings` ✓
+- `cargo test --workspace` ✓ (113 passed, 0 failed)
+- `cargo build -p transport --features usb-idevice` ✓
+- `pnpm -C desktop/ui typecheck` ✓
+- `pnpm -C desktop/ui build` ✓
+- `DEVELOPER_DIR=Xcode swift test` ✓ (58 passed, 0 failed)
+
+### Deferred to Phase 6b
+
+1. **`AdaptationDriver` wired into production `ControlPlane`.** Сам driver полностью unit-tested (Task 5), но чтобы вставить его в живой поток `Telemetry`, нужно фан-аут из `ControlPlane::run_with_outbound`: либо отдельный telemetry-канал в `ControlPlane::new`, либо broadcast вместо mpsc для events. Не сделано чтобы не трогать ControlPlane API сейчас.
+2. **Real VideoToolbox `VTEncoder` / `VTDecoder`.** План Phase 4 это пометил «out of scope here»; реальный энкодер/декодер — Phase 6b. Сейчас на проводе только raw NV12.
+3. **`SessionStateKind::Ready` без transport-тэга.** `events::pump` инфорсит «последний handshake = текущий транспорт», что работает в обычном сценарии, но если между Wi-Fi и USB-сессиями есть intermediate `Idle` — `last_transport` останется висеть на старом. Phase 6b: добавить `Ready { transport: TransportTag }` (Phase 5 Task 11 уже завёл TransportTag).
+4. **Mid-stream Wi-Fi↔USB switchover без разрыва.** Сейчас новый dial просто переписывает `outbound`-slot; правильное завершение старой сессии и плавный переход — Phase 6c.
+5. **idevice native event-stream override `UsbConductor::subscribe`** (вместо polling-fallback) — Phase 6b/c.
+6. **Live ramp speedtest** через media socket — Phase 6b (Phase 4 hangover).
+7. **`SET_MODE`/`MODE_APPLIED` round-trip-тест по проводу** (mock-iphone уже отвечает; добавить интеграционный тест, проверяющий driver→wire→mock→ack) — Phase 6b.
+
+## Retrospective
+
+### Что зашло
+
+- Целая USB-сессия теперь идёт end-to-end без живого iPhone: `cargo test -p app --test usb_full_session_e2e` проходит за 0.26 сек.
+- iOS-сторона `Auth` теперь шлёт правильный формат на проводе — pairing-key больше не подменяется на «token»-поле.
+- `AdaptationDriver` готов к подключению (unit-tests pinning поведение).
+- Tauri/UI команды стали реальными — `trust_usb_device` правда пишет ключ в `~/Library/Application Support/ClearCam/pairings.toml`.
+
+### Отклонения от плана
+
+1. **`AdaptationState::observe` берёт `(telemetry, rtt_ms, now)`**, не только `&Telemetry`. План был упрощённым — driver адаптирован к реальной сигнатуре. RTT пока всегда `0.0`; реальный PING/PONG-derived RTT — Phase 6b.
+2. **`session_id` в `accept_control_usb` генерируется как UUID** (как в `accept_control`), а не берётся из `hello.session_id`. Это защищает от client-injected session-id и матчит существующий паттерн.
+3. **`Mode` уже существовал на iOS** как Codable struct (`PixelFormat` enum, не строка) — тест использует `.nv12` enum case вместо буквальной строки.
+4. **`AdaptationDriver` production-wiring deferred** в Phase 6b — добавлять fan-out в `ControlPlane` сейчас означало бы трогать публичный API ради одной интеграции. Лучше сделать это вместе с другими ControlPlane-улучшениями (live RTT, mid-stream-switch).
+5. **`AppHandle::for_tests_with_pairing` — `#[cfg(any(test, feature = "test-util"))]`** + self-referential dev-dep. Это стандартный Cargo-паттерн но Cargo пересобирает `app` дважды. Стоит — даёт нам реальный e2e без production-only бэкдоров.
+
+### Открытые вопросы для проверки на железе
+
+- `accept_control_usb` правильно отрабатывает на iOS-Swift `Auth.pairingKey(...)` codable. Должен (тесты Mode и Auth Codable обе стороны проверяют) — но подтвердить на устройстве.
+- `IdeviceConductor::connect_to_device` против iOS NWListener на 7000/7001 — Phase 5 deferred, ещё не проверено.
+- Tauri-команда `list_usb_devices` с реальным `IdeviceConductor` должна возвращать настоящий список из usbmuxd; CI этого не покрывает.
+- `pairings.toml` access patterns на macOS — sandbox? Locations? Должен лежать в `~/Library/Application Support/ClearCam/`.
