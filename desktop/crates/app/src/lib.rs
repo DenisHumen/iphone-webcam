@@ -27,10 +27,13 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use adaptive::{select_mode, AvailableMode, Measurement, TransportClass, UserLimits};
-use ccp_protocol::{Capability, ControlMessage, Mode, SetCamera};
+use adaptive::{
+    evaluate, select_mode, AvailableMode, Measurement, SpeedtestPlan, StepObservation,
+    TransportClass, UserLimits,
+};
+use ccp_protocol::{Capability, ControlMessage, Mode, SetCamera, SpeedtestPattern, SpeedtestStart};
 use decode::{Decoder, PassthroughDecoder};
-use mediapipeline::MediaPipeline;
+use mediapipeline::{MediaPipeline, SpeedTestCounter};
 use rand::RngCore;
 use serde::Serialize;
 use session::{
@@ -62,6 +65,9 @@ pub struct AppHandle {
     pub events: Arc<Mutex<mpsc::Receiver<ControlPlaneEvent>>>,
     sinks: Arc<RwLock<Vec<Arc<dyn FrameSink>>>>,
     outbound: Arc<RwLock<Option<OutboundSender>>>,
+    /// Per-session speedtest counter. Set when a session's MediaPipeline is
+    /// spawned; cleared to `None` when the session ends.
+    speedtest_counter: Arc<RwLock<Option<SpeedTestCounter>>>,
     accept_task: JoinHandle<()>,
     usb_supervisor_task: Mutex<Option<JoinHandle<()>>>,
     /// Held so USB consumer (and future tasks) can fan out updates.
@@ -102,6 +108,7 @@ impl AppHandle {
             let events_tx = self.events_tx.clone();
             let sinks = self.sinks.clone();
             let outbound = self.outbound.clone();
+            let speedtest_counter = self.speedtest_counter.clone();
             let pairing = store.clone();
             tokio::spawn(async move {
                 while let Some(mut dialed) = rx.recv().await {
@@ -161,12 +168,29 @@ impl AppHandle {
                             *outbound.write().await = Some(out_tx);
                             let outbound_slot = outbound.clone();
 
+                            // Create a per-session speedtest counter and wire it into
+                            // the MediaPipeline.
+                            let counter = SpeedTestCounter::new();
+                            *speedtest_counter.write().await = Some(counter.clone());
+                            let speedtest_slot = speedtest_counter.clone();
+
+                            // The mock-iphone (and real iOS client) sends a MEDIA_HELLO
+                            // JSON prefix before any media frames. Consume it so the
+                            // MediaPipeline sees only raw frame data.
+                            let mut media = dialed.media;
+                            if let Err(e) = read_media_hello(&mut media).await {
+                                tracing::warn!(error = ?e, "usb media hello failed; skipping pipeline");
+                                *speedtest_slot.write().await = None;
+                                *outbound.write().await = None;
+                                continue;
+                            }
+
                             // Media stream already opened by supervisor — start MediaPipeline directly.
                             let snapshot_sinks: Vec<_> =
                                 sinks.read().await.iter().cloned().collect();
                             let decoder: Arc<dyn Decoder> = Arc::new(PassthroughDecoder);
                             let _pipeline =
-                                MediaPipeline::spawn(dialed.media, snapshot_sinks, decoder, None);
+                                MediaPipeline::spawn(media, snapshot_sinks, decoder, Some(counter));
 
                             tokio::spawn(async move {
                                 if let Err(e) = cp
@@ -181,6 +205,7 @@ impl AppHandle {
                                     tracing::warn!(error = ?e, "usb control plane exited");
                                 }
                                 *outbound_slot.write().await = None;
+                                *speedtest_slot.write().await = None;
                             });
                         }
                         Err(e) => {
@@ -220,23 +245,14 @@ impl AppHandle {
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
-    /// Run an in-process speedtest stub. Phase 4 returns a measurement based
-    /// on the most recent telemetry (sent_bitrate as a proxy for goodput);
-    /// the full ramp-over-media-socket implementation lands in Phase 6 polish.
-    /// Recommendation is computed via `adaptive::select_mode`.
+    /// Run a speedtest. When an active session + per-session counter exist, the
+    /// real ramp path is taken: sends `SPEEDTEST_START` over the control channel,
+    /// waits for the mock/device to generate ramp frames over the media socket,
+    /// drains the counter, aggregates `StepObservation`s, and calls
+    /// `adaptive::evaluate`. Falls back to the telemetry-proxy stub when there
+    /// is no active session (e.g. no phone connected).
     pub async fn run_speedtest(&self) -> anyhow::Result<SpeedtestOutcome> {
         let snap = self.snapshot.borrow().clone();
-        let goodput_mbps = snap
-            .last_telemetry
-            .as_ref()
-            .map(|t| f64::from(t.sent_bitrate_kbps) / 1000.0)
-            .unwrap_or(50.0); // sensible default when no telemetry yet
-        let measurement = Measurement {
-            goodput_mbps: goodput_mbps.max(10.0),
-            rtt_ms: 5.0,
-            jitter_ms: 1.0,
-            loss_pct: 0.0,
-        };
         let cameras = snap
             .device
             .as_ref()
@@ -254,6 +270,81 @@ impl AppHandle {
                     caps: vec![Capability::Hevc, Capability::H264, Capability::RawNv12],
                 })
                 .collect()
+        };
+
+        // Try to use the live ramp path when we have both an outbound sender
+        // and a per-session speedtest counter.
+        let out_tx = self.outbound.read().await.clone();
+        let counter = self.speedtest_counter.read().await.clone();
+
+        if let (Some(out_tx), Some(counter)) = (out_tx, counter) {
+            let plan = SpeedtestPlan::default_ramp();
+
+            // Clear any stale arrivals from previous activity.
+            let _ = counter.drain().await;
+
+            // Ask the device to generate the ramp.
+            let st_id = "ramp-1".to_string();
+            let max_kbps = plan.steps_kbps.last().copied().unwrap_or(800_000);
+            out_tx
+                .send(ControlMessage::SpeedtestStart(SpeedtestStart {
+                    id: st_id,
+                    target_bitrate_kbps: max_kbps as u32,
+                    duration_ms: plan.total_duration().as_millis() as u32,
+                    pattern: SpeedtestPattern::Ramp,
+                }))
+                .await
+                .map_err(|e| anyhow::anyhow!("send SPEEDTEST_START: {e}"))?;
+
+            // Wait for the ramp to complete plus a small grace period.
+            tokio::time::sleep(plan.total_duration() + std::time::Duration::from_millis(300)).await;
+
+            let arrivals = counter.drain().await;
+
+            // Aggregate per-step received bytes into StepObservations.
+            let observations: Vec<StepObservation> = plan
+                .steps_kbps
+                .iter()
+                .enumerate()
+                .map(|(i, &target_kbps)| {
+                    let received_bytes: u64 = arrivals
+                        .iter()
+                        .filter(|a| a.step_index == i as u32)
+                        .map(|a| a.payload_bytes)
+                        .sum();
+                    StepObservation {
+                        target_kbps,
+                        received_bytes,
+                        duration: plan.step_duration,
+                        avg_rtt_ms: 0.0,
+                    }
+                })
+                .collect();
+
+            let measurement = evaluate(&observations, 0.0);
+            let recommended = select_mode(
+                &measurement,
+                &caps,
+                TransportClass::WiFi,
+                &UserLimits::default(),
+            );
+            return Ok(SpeedtestOutcome {
+                measurement,
+                recommended,
+            });
+        }
+
+        // Fallback: no active session — use last telemetry as a goodput proxy.
+        let goodput_mbps = snap
+            .last_telemetry
+            .as_ref()
+            .map(|t| f64::from(t.sent_bitrate_kbps) / 1000.0)
+            .unwrap_or(50.0); // sensible default when no telemetry yet
+        let measurement = Measurement {
+            goodput_mbps: goodput_mbps.max(10.0),
+            rtt_ms: 5.0,
+            jitter_ms: 1.0,
+            loss_pct: 0.0,
         };
         let recommended = select_mode(
             &measurement,
@@ -275,6 +366,7 @@ impl AppHandle {
         let (snapshot_tx, snapshot_rx) = watch::channel(SessionSnapshot::idle());
         let sinks = Arc::new(RwLock::new(Vec::new()));
         let outbound = Arc::new(RwLock::new(None));
+        let speedtest_counter = Arc::new(RwLock::new(None));
         Self {
             qr: QrPayload {
                 v: 1,
@@ -287,6 +379,7 @@ impl AppHandle {
             events: Arc::new(Mutex::new(events_rx)),
             sinks,
             outbound,
+            speedtest_counter,
             accept_task: tokio::spawn(async {}), // no-op
             usb_supervisor_task: Mutex::new(None),
             snapshot_tx,
@@ -359,6 +452,7 @@ impl AppCore {
 
         let sinks: Arc<RwLock<Vec<Arc<dyn FrameSink>>>> = Arc::new(RwLock::new(Vec::new()));
         let outbound: Arc<RwLock<Option<OutboundSender>>> = Arc::new(RwLock::new(None));
+        let speedtest_counter: Arc<RwLock<Option<SpeedTestCounter>>> = Arc::new(RwLock::new(None));
         // Clone senders before moving into accept loop so USB consumer can share them.
         let snapshot_tx_for_handle = snapshot_tx.clone();
         let events_tx_for_handle = events_tx.clone();
@@ -369,6 +463,7 @@ impl AppCore {
             token.clone(),
             sinks.clone(),
             outbound.clone(),
+            speedtest_counter.clone(),
         );
 
         Ok(AppHandle {
@@ -383,6 +478,7 @@ impl AppCore {
             events: Arc::new(Mutex::new(events_rx)),
             sinks,
             outbound,
+            speedtest_counter,
             accept_task,
             usb_supervisor_task: Mutex::new(None),
             snapshot_tx: snapshot_tx_for_handle,
@@ -399,6 +495,7 @@ fn spawn_accept_loop(
     expected_token: String,
     sinks: Arc<RwLock<Vec<Arc<dyn FrameSink>>>>,
     outbound_slot: Arc<RwLock<Option<OutboundSender>>>,
+    speedtest_counter_slot: Arc<RwLock<Option<SpeedTestCounter>>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut pending: HashMap<(String, String), tokio::sync::oneshot::Sender<MediaStream>> =
@@ -423,6 +520,7 @@ fn spawn_accept_loop(
                             let (tx_media, rx_media) = tokio::sync::oneshot::channel();
                             pending.insert((session_id.clone(), auth_token.clone()), tx_media);
                             let sinks_for_session = sinks.clone();
+                            let speedtest_slot_for_media = speedtest_counter_slot.clone();
                             tokio::spawn(async move {
                                 if let Ok(ms) = rx_media.await {
                                     let snapshot: Vec<_> =
@@ -432,9 +530,11 @@ fn spawn_accept_loop(
                                         sink_count = snapshot.len(),
                                         "media stream attached; starting MediaPipeline"
                                     );
+                                    let counter = SpeedTestCounter::new();
+                                    *speedtest_slot_for_media.write().await = Some(counter.clone());
                                     let decoder: Arc<dyn Decoder> = Arc::new(PassthroughDecoder);
                                     let _pipeline =
-                                        MediaPipeline::spawn(ms, snapshot, decoder, None);
+                                        MediaPipeline::spawn(ms, snapshot, decoder, Some(counter));
                                 }
                             });
                             let cp = ControlPlane::new(
@@ -459,6 +559,7 @@ fn spawn_accept_loop(
                             }
                             *outbound_slot.write().await = Some(out_tx);
                             let outbound_slot_for_session = outbound_slot.clone();
+                            let speedtest_slot_for_session = speedtest_counter_slot.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = cp
                                     .run_with_outbound(acc, cs, out_rx, Some(telemetry_tx))
@@ -466,9 +567,11 @@ fn spawn_accept_loop(
                                 {
                                     warn!(error = ?e, "control plane exited");
                                 }
-                                // Clear the outbound slot so set_camera returns "no active session"
-                                // until the next handshake re-populates it.
+                                // Clear the outbound and speedtest-counter slots so
+                                // set_camera/run_speedtest return "no active session"
+                                // until the next handshake re-populates them.
                                 *outbound_slot_for_session.write().await = None;
+                                *speedtest_slot_for_session.write().await = None;
                             });
                         }
                         Err(e) => {

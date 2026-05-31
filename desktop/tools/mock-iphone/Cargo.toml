@@ -20,6 +20,7 @@ ccp-protocol = { path = "../../crates/ccp-protocol" }
 transport = { path = "../../crates/transport" }
 session = { path = "../../crates/session" }
 mediapipeline = { path = "../../crates/mediapipeline" }
+adaptive = { path = "../../crates/adaptive" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

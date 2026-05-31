@@ -1999,6 +1999,7 @@ dependencies = [
 name = "mock-iphone"
 version = "0.1.0"
 dependencies = [
+ "adaptive",
  "anyhow",
  "ccp-protocol",
  "mediapipeline",

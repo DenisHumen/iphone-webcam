@@ -10,7 +10,7 @@ use ccp_protocol::{
     ControlEnvelope, ControlMessage, DeviceIdent, DeviceInfo, Flags, Hello, MediaHeader, MediaType,
     ModeApplied, Pong, Telemetry, ThermalState, PROTO_VER,
 };
-use mediapipeline::write_media_frame;
+use mediapipeline::{write_media_frame, SPEEDTEST_SEQ_BASE};
 use session::{keepalive::now_usec, write_media_hello, MediaBinding};
 use tokio::sync::Mutex;
 use tokio::time::sleep;
@@ -324,6 +324,15 @@ pub(crate) async fn run_session(
                                 })
                                 .await?;
                         }
+                        ControlMessage::SpeedtestStart(st) => {
+                            info!(id = %st.id, "mock-iphone: SPEEDTEST_START; generating ramp");
+                            let media_for_ramp = media.clone();
+                            let w = args.width;
+                            let h = args.height;
+                            tokio::spawn(async move {
+                                speedtest_ramp(media_for_ramp, w, h).await;
+                            });
+                        }
                         ControlMessage::Bye(b) => {
                             info!(reason = %b.reason, "server BYE");
                             break Ok(());
@@ -400,6 +409,54 @@ pub(crate) fn fill_synthetic_nv12(buf: &mut [u8], width: u16, height: u16, t: u3
     for pair in 0..(w * h / 4) {
         buf[uv_off + pair * 2] = cb;
         buf[uv_off + pair * 2 + 1] = cr;
+    }
+}
+
+/// Generate a synthetic NV12 ramp over the media socket in response to
+/// `SPEEDTEST_START`. Each step sends enough filler frames to hit the target
+/// bitrate for that step's duration. All frames in a step share a reserved
+/// `seq` that encodes the step index so the desktop counter can tally bytes
+/// per step.
+pub(crate) async fn speedtest_ramp(media: Arc<Mutex<MediaStream>>, width: u16, height: u16) {
+    use adaptive::speedtest::{frames_per_step_for_target, SpeedtestPlan};
+
+    let plan = SpeedtestPlan::default_ramp();
+    let frame_bytes = (width as usize) * (height as usize) * 3 / 2;
+    // Mid-gray filler; content irrelevant — only byte count matters for the counter.
+    let buf = vec![0x80u8; frame_bytes];
+
+    for (step_index, &target_kbps) in plan.steps_kbps.iter().enumerate() {
+        let frames = frames_per_step_for_target(
+            target_kbps,
+            u32::from(width),
+            u32::from(height),
+            plan.step_duration.as_millis() as u64,
+        );
+        // All frames in a step share the step's marker seq so the counter's
+        // `speedtest_step_index(seq) = seq - SPEEDTEST_SEQ_BASE = step_index`.
+        let step_seq = SPEEDTEST_SEQ_BASE + step_index as u32;
+        let per_frame = plan.step_duration / frames.max(1);
+        for _ in 0..frames {
+            let header = MediaHeader {
+                media_type: MediaType::Video,
+                flags: Flags::empty(),
+                codec: Codec::Raw,
+                width,
+                height,
+                seq: step_seq,
+                pts_usec: now_usec(),
+                payload_len: buf.len() as u32,
+            };
+            let mut guard = media.lock().await;
+            if write_media_frame(&mut guard.writer, &header, &buf)
+                .await
+                .is_err()
+            {
+                return;
+            }
+            drop(guard);
+            tokio::time::sleep(per_frame).await;
+        }
     }
 }
 
