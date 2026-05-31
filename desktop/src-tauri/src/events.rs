@@ -75,6 +75,11 @@ pub async fn pump(app: tauri::AppHandle, state: super::commands::AppState) {
                         warn!(error = ?e, "emit session://usb_trust_request failed");
                     }
                 }
+                ControlPlaneEvent::ModeApplied { mode } => {
+                    if let Err(e) = app.emit("session://mode_applied", &mode) {
+                        warn!(error = ?e, "emit session://mode_applied failed");
+                    }
+                }
             },
         }
     }

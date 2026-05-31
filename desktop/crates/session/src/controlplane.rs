@@ -5,7 +5,7 @@
 //!   - sending PING on a keepalive timer, treating PONG silence as disconnect
 //!   - on BYE / disconnect, transitions to `Reconnecting` / `Closed`.
 
-use ccp_protocol::{ControlEnvelope, ControlMessage, Ping, Pong, Telemetry};
+use ccp_protocol::{ControlEnvelope, ControlMessage, Mode, Ping, Pong, Telemetry};
 use tokio::sync::{mpsc, watch};
 use tokio::time::{interval, Instant};
 use tracing::{debug, info, warn};
@@ -31,6 +31,10 @@ pub enum ControlPlaneEvent {
     /// The UI should prompt the user to trust/pair the device.
     UsbTrustRequest {
         udid: String,
+    },
+    /// Phone confirmed a SET_MODE took effect.
+    ModeApplied {
+        mode: Mode,
     },
 }
 
@@ -190,6 +194,13 @@ impl ControlPlane {
                             .await;
                             let _ = self.events_tx.send(ControlPlaneEvent::Closed(b.reason)).await;
                             return Ok(());
+                        }
+                        ControlMessage::ModeApplied(ma) => {
+                            info!(mode = ?ma.mode, at_seq = ma.at_seq, "peer applied mode");
+                            let _ = self
+                                .events_tx
+                                .send(ControlPlaneEvent::ModeApplied { mode: ma.mode })
+                                .await;
                         }
                         other => {
                             debug!(?other, "unhandled message in Phase 1");

@@ -42,6 +42,7 @@ async fn supervisor_delivers_dialed_streams_for_usb_device() {
         fps: 30,
         send_video: false,
         transport: mock_iphone::TransportMode::UsbListener,
+        congested: false,
     };
     let mock_task = tokio::spawn(mock_iphone::run(mock_args));
 

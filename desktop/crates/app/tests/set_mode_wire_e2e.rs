@@ -1,13 +1,12 @@
-//! Full USB session: UsbSupervisor dials a mock-iphone listener, then
-//! AppCore consumes DialedStreams, runs accept_control_usb, and reaches
-//! SessionStateKind::Ready. Activated by Task 4 (mock-iphone sends
-//! Auth::PairingKey).
+//! Phase 6b closed-loop adaptation: a congested mock-iphone makes the desktop
+//! AdaptationDriver emit SET_MODE on the wire; mock-iphone acks MODE_APPLIED,
+//! which the desktop surfaces as ControlPlaneEvent::ModeApplied.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use app::{AppHandle, PairingMaterial, PairingStore};
-use session::SessionStateKind;
+use session::{ControlPlaneEvent, SessionStateKind};
 use transport::usb::{LoopbackConductor, LoopbackDevice};
 
 async fn pick_free_port() -> u16 {
@@ -18,7 +17,7 @@ async fn pick_free_port() -> u16 {
 }
 
 #[tokio::test]
-async fn usb_supervisor_drives_session_to_ready() {
+async fn congestion_drives_set_mode_and_mock_acks_mode_applied() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
     let cport = pick_free_port().await;
@@ -32,7 +31,7 @@ async fn usb_supervisor_drives_session_to_ready() {
     );
     let key = PairingMaterial::new_random();
     let key_b64 = key.as_b64();
-    store.put("TEST-USB-UDID", key).await.unwrap();
+    store.put("E2E-UDID", key).await.unwrap();
 
     let mock_args = mock_iphone::Args {
         host: "127.0.0.1".into(),
@@ -44,7 +43,7 @@ async fn usb_supervisor_drives_session_to_ready() {
         fps: 30,
         send_video: false,
         transport: mock_iphone::TransportMode::UsbListener,
-        congested: false,
+        congested: true,
     };
     let mock_task = tokio::spawn(mock_iphone::run(mock_args));
     tokio::time::sleep(Duration::from_millis(150)).await;
@@ -52,7 +51,7 @@ async fn usb_supervisor_drives_session_to_ready() {
     let lb = Arc::new(LoopbackConductor::new());
     lb.register(LoopbackDevice {
         id: 1,
-        udid: "TEST-USB-UDID".into(),
+        udid: "E2E-UDID".into(),
         control_addr: format!("127.0.0.1:{cport}").parse().unwrap(),
         media_addr: format!("127.0.0.1:{mport}").parse().unwrap(),
     })
@@ -62,6 +61,7 @@ async fn usb_supervisor_drives_session_to_ready() {
     app.start_usb_supervisor(lb, store, Duration::from_millis(50))
         .await;
 
+    // Wait for Ready.
     let snap = app.snapshot.clone();
     for _ in 0..200 {
         if matches!(snap.borrow().state, SessionStateKind::Ready { .. }) {
@@ -71,8 +71,32 @@ async fn usb_supervisor_drives_session_to_ready() {
     }
     assert!(
         matches!(snap.borrow().state, SessionStateKind::Ready { .. }),
-        "expected Ready, got {:?}",
-        snap.borrow().state
+        "session never reached Ready"
+    );
+
+    // Observe events until we see ModeApplied (the full loop closed), or time out.
+    let mut events = app.events.lock().await;
+    let mut saw_mode_applied = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    while tokio::time::Instant::now() < deadline {
+        tokio::select! {
+            ev = events.recv() => {
+                match ev {
+                    Some(ControlPlaneEvent::ModeApplied { .. }) => {
+                        saw_mode_applied = true;
+                        break;
+                    }
+                    Some(_) => {}  // ignore Telemetry/DeviceInfo/StateChanged/etc.
+                    None => break,
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+        }
+    }
+    drop(events);
+    assert!(
+        saw_mode_applied,
+        "expected the adaptation loop to close: congested telemetry → SET_MODE → MODE_APPLIED"
     );
 
     mock_task.abort();

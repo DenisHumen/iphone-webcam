@@ -53,6 +53,9 @@ pub struct Args {
     pub fps: u32,
     pub send_video: bool,
     pub transport: TransportMode,
+    /// When true, send rising queue_depth + drop_count each telemetry tick so
+    /// the desktop AdaptationState detects sustained congestion quickly.
+    pub congested: bool,
 }
 
 pub fn parse_args() -> anyhow::Result<Args> {
@@ -65,6 +68,7 @@ pub fn parse_args() -> anyhow::Result<Args> {
     let mut fps: u32 = 30;
     let mut send_video = true;
     let mut transport = TransportMode::WifiClient;
+    let mut congested = false;
     let mut it = env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -76,6 +80,7 @@ pub fn parse_args() -> anyhow::Result<Args> {
             "--height" => height = it.next().and_then(|s| s.parse().ok()).unwrap_or(720),
             "--fps" => fps = it.next().and_then(|s| s.parse().ok()).unwrap_or(30),
             "--no-video" => send_video = false,
+            "--congested" => congested = true,
             "--transport" => {
                 let v = it.next().unwrap_or_default();
                 transport = v.parse()?;
@@ -83,7 +88,7 @@ pub fn parse_args() -> anyhow::Result<Args> {
             "--help" | "-h" => {
                 println!(
                     "mock-iphone --host <host> --cport <port> --mport <port> --token <token> \
-                     [--width N --height N --fps N --no-video --transport wifi|usb]"
+                     [--width N --height N --fps N --no-video --transport wifi|usb --congested]"
                 );
                 std::process::exit(0);
             }
@@ -100,6 +105,7 @@ pub fn parse_args() -> anyhow::Result<Args> {
         fps,
         send_video,
         transport,
+        congested,
     })
 }
 
@@ -257,8 +263,15 @@ pub(crate) async fn run_session(
     };
 
     let mut battery = 0.87f64;
+    let mut congestion_tick: u32 = 0;
     let result = loop {
         seq += 1;
+        let (queue_depth, drop_count) = if args.congested {
+            congestion_tick += 1;
+            (2 + congestion_tick, u64::from(5 * congestion_tick))
+        } else {
+            (0, 0)
+        };
         control
             .send(&ControlEnvelope {
                 seq,
@@ -271,8 +284,8 @@ pub(crate) async fn run_session(
                     sent_bitrate_kbps: 0,
                     enc_fps: args.fps,
                     capture_fps: args.fps,
-                    queue_depth: 0,
-                    drop_count: 0,
+                    queue_depth,
+                    drop_count,
                 }),
             })
             .await?;
