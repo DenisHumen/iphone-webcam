@@ -4057,6 +4057,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "ccp-protocol",
+ "futures",
  "idevice",
  "serde",
  "serde_json",

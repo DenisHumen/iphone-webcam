@@ -558,3 +558,73 @@ git checkout main
 git merge --ff-only feature/phase-6b-adaptation-and-speedtest
 git branch -d feature/phase-6b-adaptation-and-speedtest
 ```
+
+---
+
+## Acceptance log
+
+### 2026-05-31 — Phase 6b adaptation production + live speedtest
+
+**What landed**
+
+- **session** — `SessionStateKind::Ready { transport: Option<TransportTag> }` (backward-compat JSON via `#[serde(default, skip_serializing_if)]`); `ControlPlane` carries a `TransportTag` and broadcasts it. `run_with_outbound` gains `telemetry_tx: Option<mpsc::Sender<Telemetry>>` and forks inbound telemetry via `try_send` (non-blocking — slow driver can't back-pressure the wire). New `ControlPlaneEvent::ModeApplied { mode }` surfaced from inbound `MODE_APPLIED`.
+- **app** — per-session `AdaptationDriver` bridge spawned on both Wi-Fi and USB paths, consuming the forked telemetry and emitting `SET_MODE` on congestion (Phase 6a's headless driver is now a production path). Per-session `SpeedTestCounter` slot; `run_speedtest()` is now a real ramp (sends `SPEEDTEST_START`, drains the counter, builds `StepObservation`s, `adaptive::evaluate`), with the telemetry-proxy stub retained as a no-session fallback. **Latent bug fixed:** the USB media path never consumed `MEDIA_HELLO` before spawning `MediaPipeline` — the pipeline silently died on `BadMagic`; added an inline `read_media_hello` (mirrors the Wi-Fi path).
+- **ccp-protocol** — `Mode::default_streaming_1080p30()` production helper (HEVC 1080p30 @ 30 Mbps).
+- **mediapipeline** — `SpeedTestCounter` + reserved-seq routing: media frames with `seq >= 0xFFFF_0000` are tallied per-step and never fanned to the video sinks. `MediaPipeline::spawn` takes `Option<SpeedTestCounter>`.
+- **adaptive** — reused existing `SpeedtestPlan`/`evaluate`/`frames_per_step_for_target` (Phase 4 scaffolding) — no changes needed beyond consumption.
+- **mock-iphone** — `--congested` knob (rising queue_depth/drop_count for closed-loop adaptation tests); `SPEEDTEST_START` arm spawning `speedtest_ramp` (per-step reserved-seq NV12 filler at ramp bitrates).
+- **transport** — `IdeviceConductor::subscribe` overrides the polling default with usbmuxd's native `Listen` stream (instant device-add/remove, no 500ms poll latency). Runs in a dedicated OS thread + current-thread runtime because idevice's stream is non-`Send`. `LoopbackConductor` keeps the polling default.
+- **tauri** — `events::pump` emits `session://transport_changed` (from `Ready { transport }` + handshake variants) and `session://mode_applied`.
+
+**New tests**
+
+- `session`: `ready_*` (3), `telemetry_is_forked_to_optional_channel`.
+- `ccp-protocol`: `default_streaming_mode_is_hevc_1080p30`.
+- `mediapipeline`: `speedtest_marker_frames_bypass_sinks_and_hit_counter`.
+- `app` e2e: `set_mode_wire_e2e` (closed-loop congestion → SET_MODE → MODE_APPLIED, 5/5 stable), `speedtest_live_e2e` (SPEEDTEST_START → ramp → counter → evaluate → positive goodput, 5/5 stable).
+
+### Gates
+
+- `cargo fmt --check` ✓
+- `cargo clippy --workspace --all-targets -- -D warnings` ✓
+- `cargo test --workspace` ✓ (121 passed, 0 failed)
+- `cargo build -p transport --features usb-idevice` ✓
+- `cargo clippy -p transport --features usb-idevice` ✓
+- `pnpm -C desktop/ui typecheck && build` ✓
+- `DEVELOPER_DIR=Xcode swift test` ✓ (58 passed, 0 failed)
+
+### Deferred to Phase 6c (hardware-dependent)
+
+1. **Real VideoToolbox `VTEncoder` (iOS) / `VTDecoder` (macOS).** Needs `VTCompressionSession` + objc2 bindings; only meaningful with a device + camera.
+2. **Mid-stream Wi-Fi↔USB switchover** without dropping the active session (supervisor currently dials fresh; the selector logic exists but no graceful handover).
+3. **`ffmpeg-next` decoder adapter** (Linux/Windows fallback when no VideoToolbox).
+4. **Reconnect throttling / backoff tuning** on real network failures.
+5. **iOS `NWListener` on-device acceptance testing** (sandbox blocks `swift test` from accepting inbound connections).
+6. **Live RTT into the AdaptationDriver** — currently passes `rtt_ms = 0.0`; real PING/PONG-derived RTT would let the step-down logic use the RTT-doubling signal.
+7. **`run_speedtest` real-network calibration** — over loopback the ramp always saturates (≈800 Mbps); thresholds need tuning against an actual Wi-Fi link before v1.
+
+### CMIO Camera Extension (Phase 3)
+
+Still blocked on Apple Developer ID — see [docs/14-apple-developer-id-guide.md](../docs/14-apple-developer-id-guide.md).
+
+## Retrospective
+
+### What landed
+
+- The adaptation loop is now **closed end-to-end headlessly**: congested telemetry from the mock makes the desktop emit `SET_MODE`, the mock acks `MODE_APPLIED`, and the desktop surfaces it as an event. This was the single biggest "wired but not connected" gap from Phase 6a.
+- The speedtest is **live**: `run_speedtest()` actually exercises the media socket with a ramp and measures goodput via the reserved-seq counter. The whole `SPEEDTEST_START → ramp → counter → evaluate` path runs in a test.
+- `IdeviceConductor` now gets **instant** device events on real hardware instead of polling.
+- A real latent bug (USB media pipeline dying on unconsumed `MEDIA_HELLO`) was caught only because the live speedtest needed the pipeline alive — a good argument for end-to-end tests over unit-only coverage.
+
+### Deviations from the plan
+
+1. **Task 3 upgraded from structural to a true closed loop.** The plan scoped Task 3 as "verify telemetry reaches the driver"; since Task 2 already wired the driver, we instead added `ControlPlaneEvent::ModeApplied` + a mock congestion knob and asserted the full loop closes. Higher value, slightly more code.
+2. **`IdeviceConductor::subscribe` runs on a dedicated OS thread**, not `tokio::spawn`. idevice 0.1.61's `listen()` returns a non-`Send` stream; a current-thread runtime on its own thread is the clean workaround. `tx` is `Send` so events cross the boundary fine.
+3. **USB `read_media_hello` fix** was not in the plan — it surfaced as a prerequisite for the live speedtest (the pipeline must survive to count ramp frames). It also hardens real USB video streaming.
+4. **`run_speedtest` keeps the telemetry-proxy fallback** for the no-active-session case rather than erroring — keeps the existing UI contract intact.
+
+### Open questions for real hardware (Phase 6c)
+
+- `IdeviceConductor::subscribe`'s dedicated thread loops on `stream.next()` forever; it exits when the receiver drops, but only on the next event. For a long-lived app-startup subscription this is fine; verify no thread accumulation if subscribe is ever called repeatedly.
+- The speedtest ramp saturates loopback (≈800 Mbps); real-Wi-Fi step thresholds in `adaptive::evaluate` (85% of target, RTT-doubling) need calibration against an actual link.
+- `AdaptationDriver` passes `rtt_ms = 0.0` — confirm the queue_depth/drop_count signals alone are sufficient on real telemetry, or wire PING/PONG RTT.
