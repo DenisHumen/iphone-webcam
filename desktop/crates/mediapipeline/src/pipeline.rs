@@ -18,6 +18,9 @@ use transport::MediaStream;
 use crate::error::MediaPipelineError;
 use crate::frame_buf::split_nv12;
 use crate::reader::{read_media_frame, MediaFrame};
+use crate::speedtest_counter::{
+    is_speedtest_marker, speedtest_step_index, SpeedTestCounter, SpeedtestArrival,
+};
 
 pub struct MediaPipeline {
     pub task: JoinHandle<()>,
@@ -28,12 +31,25 @@ impl MediaPipeline {
         mut stream: MediaStream,
         sinks: Vec<Arc<dyn FrameSink>>,
         decoder: Arc<dyn Decoder>,
+        speedtest_counter: Option<SpeedTestCounter>,
     ) -> Self {
         let task = tokio::spawn(async move {
             info!("media pipeline running");
             loop {
                 match read_media_frame(&mut stream).await {
                     Ok(frame) => {
+                        if is_speedtest_marker(frame.header.seq) {
+                            if let Some(counter) = &speedtest_counter {
+                                counter
+                                    .record(SpeedtestArrival {
+                                        step_index: speedtest_step_index(frame.header.seq),
+                                        payload_bytes: frame.payload.len() as u64,
+                                    })
+                                    .await;
+                            }
+                            // Never fan speedtest filler to the video sinks.
+                            continue;
+                        }
                         if let Err(e) = ingest(&frame, &sinks, &*decoder).await {
                             warn!(error = ?e, "frame ingest failed; continuing");
                         }
@@ -138,7 +154,7 @@ mod tests {
         let sink_arc: Arc<dyn FrameSink> = Arc::new(CapturingSink {
             frames: frames.clone(),
         });
-        let pipeline = MediaPipeline::spawn(ms, vec![sink_arc], Arc::new(PassthroughDecoder));
+        let pipeline = MediaPipeline::spawn(ms, vec![sink_arc], Arc::new(PassthroughDecoder), None);
 
         for seq in 0..3u32 {
             let header = MediaHeader {
@@ -171,7 +187,7 @@ mod tests {
         let sink_arc: Arc<dyn FrameSink> = Arc::new(CapturingSink {
             frames: frames.clone(),
         });
-        let pipeline = MediaPipeline::spawn(ms, vec![sink_arc], Arc::new(PassthroughDecoder));
+        let pipeline = MediaPipeline::spawn(ms, vec![sink_arc], Arc::new(PassthroughDecoder), None);
 
         // Config frame — should be swallowed.
         let cfg = MediaHeader {
@@ -211,5 +227,74 @@ mod tests {
         assert_eq!(got[1].seq, 2);
         // PassthroughDecoder writes seq as Y byte.
         assert_eq!(got[0].plane_y[0], 1);
+    }
+
+    #[tokio::test]
+    async fn speedtest_marker_frames_bypass_sinks_and_hit_counter() {
+        use crate::speedtest_counter::{SpeedTestCounter, SPEEDTEST_SEQ_BASE};
+
+        let (mut writer, ms) = build_stream(1024 * 1024);
+        let frames = Arc::new(Mutex::new(Vec::<Frame>::new()));
+        let sink_arc: Arc<dyn FrameSink> = Arc::new(CapturingSink {
+            frames: frames.clone(),
+        });
+        let counter = SpeedTestCounter::new();
+        let pipeline = MediaPipeline::spawn(
+            ms,
+            vec![sink_arc],
+            Arc::new(PassthroughDecoder),
+            Some(counter.clone()),
+        );
+
+        // 2 normal frames (seq 0, 1).
+        for seq in 0..2u32 {
+            let header = MediaHeader {
+                media_type: MediaType::Video,
+                flags: Flags::FULL_RANGE,
+                codec: Codec::Raw,
+                width: 16,
+                height: 16,
+                seq,
+                pts_usec: u64::from(seq) * 33_000,
+                payload_len: 384,
+            };
+            writer.write_all(&header.encode()).await.unwrap();
+            writer.write_all(&vec![seq as u8; 384]).await.unwrap();
+        }
+
+        // 3 speedtest-marker frames — step 0, payload sizes 100, 200, 300.
+        let marker_sizes: [u32; 3] = [100, 200, 300];
+        for &sz in &marker_sizes {
+            let header = MediaHeader {
+                media_type: MediaType::Video,
+                flags: Flags::empty(),
+                codec: Codec::Raw,
+                width: 0,
+                height: 0,
+                seq: SPEEDTEST_SEQ_BASE, // step_index = 0
+                pts_usec: 0,
+                payload_len: sz,
+            };
+            writer.write_all(&header.encode()).await.unwrap();
+            writer.write_all(&vec![0u8; sz as usize]).await.unwrap();
+        }
+
+        writer.flush().await.unwrap();
+        drop(writer);
+        let _ = pipeline.task.await;
+
+        // Sink must have received only the 2 normal frames.
+        let got = frames.lock().await;
+        assert_eq!(got.len(), 2, "speedtest filler must not reach video sinks");
+        assert_eq!(got[0].seq, 0);
+        assert_eq!(got[1].seq, 1);
+
+        // Counter must have accumulated all 3 marker payloads for step 0.
+        let expected: u64 = marker_sizes.iter().map(|&s| s as u64).sum();
+        assert_eq!(
+            counter.bytes_for_step(0).await,
+            expected,
+            "counter must record all speedtest payload bytes for step 0"
+        );
     }
 }

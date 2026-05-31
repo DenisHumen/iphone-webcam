@@ -166,7 +166,7 @@ impl AppHandle {
                                 sinks.read().await.iter().cloned().collect();
                             let decoder: Arc<dyn Decoder> = Arc::new(PassthroughDecoder);
                             let _pipeline =
-                                MediaPipeline::spawn(dialed.media, snapshot_sinks, decoder);
+                                MediaPipeline::spawn(dialed.media, snapshot_sinks, decoder, None);
 
                             tokio::spawn(async move {
                                 if let Err(e) = cp
@@ -433,7 +433,8 @@ fn spawn_accept_loop(
                                         "media stream attached; starting MediaPipeline"
                                     );
                                     let decoder: Arc<dyn Decoder> = Arc::new(PassthroughDecoder);
-                                    let _pipeline = MediaPipeline::spawn(ms, snapshot, decoder);
+                                    let _pipeline =
+                                        MediaPipeline::spawn(ms, snapshot, decoder, None);
                                 }
                             });
                             let cp = ControlPlane::new(
