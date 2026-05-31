@@ -9,10 +9,11 @@ description = "ClearCam transport — async TCP server/client + length-prefixed 
 
 [features]
 default = []
-usb-idevice = ["dep:idevice"]
+usb-idevice = ["dep:idevice", "dep:futures"]
 
 [dependencies]
 idevice = { workspace = true, optional = true }
+futures = { version = "0.3", optional = true }
 ccp-protocol = { path = "../ccp-protocol" }
 tokio = { workspace = true }
 bytes = { workspace = true }

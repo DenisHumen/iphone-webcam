@@ -6,7 +6,9 @@
 use async_trait::async_trait;
 use idevice::usbmuxd::{Connection, UsbmuxdAddr, UsbmuxdConnection, UsbmuxdDevice};
 
-use super::conductor::{BoxedReader, BoxedWriter, ConnectionType, UsbConductor, UsbDevice};
+use super::conductor::{
+    BoxedReader, BoxedWriter, ConnectionType, UsbConductor, UsbDevice, UsbEvent,
+};
 use super::error::UsbTransportError;
 
 pub struct IdeviceConductor {
@@ -76,6 +78,89 @@ impl UsbConductor for IdeviceConductor {
 
         let (r, w) = tokio::io::split(stream);
         Ok((Box::pin(r), Box::pin(w)))
+    }
+
+    fn subscribe(
+        self: std::sync::Arc<Self>,
+        _poll_interval: std::time::Duration,
+    ) -> tokio::sync::mpsc::Receiver<UsbEvent>
+    where
+        Self: Sized,
+    {
+        use futures::StreamExt;
+        use idevice::usbmuxd::UsbmuxdListenEvent;
+        use std::collections::HashMap;
+
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        let addr = self.addr.clone();
+
+        // `muxd.listen()` returns `Pin<Box<dyn Stream<...> + 'a>>` without `+Send`,
+        // so we can't use `tokio::spawn`. Run the listener in a dedicated OS thread
+        // with its own single-threaded Tokio runtime — this is safe because the
+        // underlying `ReadWrite` socket IS Send and Sync; only the type annotation
+        // omits the bound.
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    tracing::warn!(error = %e, "usb subscribe: failed to build runtime");
+                    return;
+                }
+            };
+            rt.block_on(async move {
+                // Own the muxd connection for the whole listen lifetime; the stream
+                // borrows it, so both must stay in this scope.
+                let mut muxd = match addr.connect(0).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "usb subscribe: connect to usbmuxd failed");
+                        return;
+                    }
+                };
+                let mut stream = match muxd.listen().await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "usb subscribe: Listen request failed");
+                        return;
+                    }
+                };
+
+                // Track id → udid so Disconnected(id) can be reported with its udid.
+                let mut known: HashMap<u32, String> = HashMap::new();
+
+                while let Some(item) = stream.next().await {
+                    match item {
+                        Ok(UsbmuxdListenEvent::Connected(dev)) => {
+                            let mapped = map_device(dev);
+                            // Only surface USB-attached devices (skip network-only).
+                            if matches!(mapped.connection, ConnectionType::Usb) {
+                                known.insert(mapped.id, mapped.udid.clone());
+                                if tx.send(UsbEvent::Connected(mapped)).await.is_err() {
+                                    return; // receiver dropped
+                                }
+                            }
+                        }
+                        Ok(UsbmuxdListenEvent::Disconnected(id)) => {
+                            let udid = known.remove(&id).unwrap_or_default();
+                            if tx.send(UsbEvent::Lost { id, udid }).await.is_err() {
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "usb subscribe: listen stream error; stopping"
+                            );
+                            return;
+                        }
+                    }
+                }
+            });
+        });
+        rx
     }
 }
 
